@@ -1,0 +1,487 @@
+---
+title: 'OpenAI API Configuration'
+description: 'Configure OpenAI GPT models, embeddings, and Whisper transcription'
+icon: 'brain'
+---
+
+## Overview
+
+The WhatsApp RAG Bot uses OpenAI's API for:
+
+- **Chat Completion**: GPT models for conversational responses
+- **Text Embeddings**: Vector embeddings for semantic search (RAG)
+- **Audio Transcription**: Whisper model for voice message processing
+
+## Prerequisites
+
+You need an OpenAI API key with access to:
+
+- GPT models (gpt-3.5-turbo or gpt-4)
+- Text embedding models
+- Whisper audio transcription
+
+Get your API key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+
+## Configuration Options
+
+### Option 1: Database Configuration (Recommended)
+
+Configure through the admin dashboard:
+
+```php src/Services/CredentialService.php
+$credentialService->saveOpenAICredentials([
+    'api_key' => 'sk-...',
+    'model' => 'gpt-4',
+    'embedding_model' => 'text-embedding-3-small'
+]);
+```
+
+<Info>
+  Credentials stored in the database are automatically encrypted using AES-256-CBC encryption.
+</Info>
+
+### Option 2: Environment Variables
+
+Add these to your `.env` file:
+
+```bash .env
+OPENAI_API_KEY=sk-...
+OPENAI_MODEL=gpt-3.5-turbo
+OPENAI_EMBEDDING_MODEL=text-embedding-ada-002
+```
+
+### Configuration File
+
+```php config/config.php
+'openai' => [
+    'api_key' => getenv('OPENAI_API_KEY') ?: '',
+    'model' => getenv('OPENAI_MODEL') ?: 'gpt-3.5-turbo',
+    'embedding_model' => getenv('OPENAI_EMBEDDING_MODEL') ?: 'text-embedding-ada-002',
+    'temperature' => 0.7,
+    'max_tokens' => 500
+],
+```
+
+## Available Models
+
+### Chat Models
+
+<CardGroup cols={2}>
+  <Card title="GPT-3.5 Turbo" icon="zap">
+    **Model**: `gpt-3.5-turbo`
+    
+    Fast and cost-effective for most use cases. Good balance of performance and price.
+    
+    - Context: 16k tokens
+    - Speed: Very fast
+    - Cost: Low
+  </Card>
+  
+  <Card title="GPT-4" icon="sparkles">
+    **Model**: `gpt-4`
+    
+    More capable and accurate responses. Better for complex reasoning.
+    
+    - Context: 8k tokens
+    - Speed: Slower
+    - Cost: Higher
+  </Card>
+  
+  <Card title="GPT-4 Turbo" icon="rocket">
+    **Model**: `gpt-4-turbo-preview`
+    
+    Latest GPT-4 with improved performance and larger context window.
+    
+    - Context: 128k tokens
+    - Speed: Fast
+    - Cost: Moderate
+  </Card>
+  
+  <Card title="GPT-4o" icon="star">
+    **Model**: `gpt-4o`
+    
+    Optimized version with best balance of speed and capability.
+    
+    - Context: 128k tokens
+    - Speed: Very fast
+    - Cost: Moderate
+  </Card>
+</CardGroup>
+
+### Embedding Models
+
+<Tabs>
+  <Tab title="Ada-002 (Legacy)">
+    **Model**: `text-embedding-ada-002`
+    
+    The previous generation embedding model.
+    
+    - Dimensions: 1536
+    - Cost: $0.0001 per 1K tokens
+    - Good for most RAG use cases
+    
+    ```php
+    'embedding_model' => 'text-embedding-ada-002'
+    ```
+  </Tab>
+  
+  <Tab title="v3-small (Recommended)">
+    **Model**: `text-embedding-3-small`
+    
+    New generation model with better performance.
+    
+    - Dimensions: 1536
+    - Cost: $0.00002 per 1K tokens (5x cheaper)
+    - Improved accuracy
+    
+    ```php
+    'embedding_model' => 'text-embedding-3-small'
+    ```
+  </Tab>
+  
+  <Tab title="v3-large">
+    **Model**: `text-embedding-3-large`
+    
+    Highest quality embeddings.
+    
+    - Dimensions: 3072
+    - Cost: $0.00013 per 1K tokens
+    - Best accuracy for complex queries
+    
+    ```php
+    'embedding_model' => 'text-embedding-3-large'
+    ```
+  </Tab>
+</Tabs>
+
+## Model Parameters
+
+### Temperature
+
+Controls randomness in responses (0.0 to 2.0):
+
+```php
+'temperature' => 0.7  // Default: balanced creativity
+```
+
+- **0.0-0.3**: Focused and deterministic (good for factual responses)
+- **0.4-0.7**: Balanced creativity and consistency (recommended)
+- **0.8-1.0**: More creative and varied responses
+- **1.1-2.0**: Very creative (may be less coherent)
+
+### Max Tokens
+
+Maximum length of generated responses:
+
+```php
+'max_tokens' => 500  // Default: ~375 words
+```
+
+<Info>
+  1 token ≈ 0.75 words in English. Adjust based on your needs:
+  - Short answers: 150-300 tokens
+  - Medium answers: 300-500 tokens
+  - Long answers: 500-1000 tokens
+</Info>
+
+### Usage in Code
+
+```php webhook.php
+$openaiTemperature = 0.7;
+$openaiMaxTokens = 500;
+
+if ($credentialService && $credentialService->hasOpenAICredentials()) {
+    $oaiCreds = $credentialService->getOpenAICredentials();
+    $openai = new OpenAIService(
+        $oaiCreds['api_key'],
+        $oaiCreds['model'],
+        $oaiCreds['embedding_model'],
+        $logger
+    );
+    $openaiTemperature = $oaiCreds['temperature'] ?? 0.7;
+    $openaiMaxTokens = $oaiCreds['max_tokens'] ?? 500;
+}
+```
+
+## OpenAI Service Features
+
+### Chat Completion
+
+Generate responses with context and conversation history:
+
+```php
+$openai = new OpenAIService(
+    $apiKey,
+    'gpt-3.5-turbo',
+    'text-embedding-ada-002',
+    $logger
+);
+
+$response = $openai->generateResponse(
+    $userMessage,
+    $contextFromRAG,
+    $systemPrompt,
+    $temperature = 0.7,
+    $maxTokens = 500,
+    $conversationHistory = []
+);
+```
+
+### Text Embeddings
+
+Generate vector embeddings for semantic search:
+
+```php
+// Single text
+$embedding = $openai->generateEmbedding($text);
+
+// Batch processing
+$texts = ['text 1', 'text 2', 'text 3'];
+$embeddings = $openai->generateEmbeddings($texts);
+```
+
+### Audio Transcription
+
+Transcribe voice messages using Whisper:
+
+```php src/Services/OpenAIService.php
+public function transcribeAudio($audioContent, $filename = 'audio.ogg')
+{
+    $response = $this->client->post('audio/transcriptions', [
+        'multipart' => [
+            [
+                'name' => 'file',
+                'contents' => $audioContent,
+                'filename' => $filename
+            ],
+            [
+                'name' => 'model',
+                'contents' => 'whisper-1'
+            ],
+            [
+                'name' => 'language',
+                'contents' => 'es'  // Spanish
+            ]
+        ]
+    ]);
+    
+    $data = json_decode($response->getBody()->getContents(), true);
+    return $data['text'] ?? '';
+}
+```
+
+<Note>
+  Audio transcription is only available in AI mode. In classic mode, users are prompted to send text messages instead.
+</Note>
+
+## RAG Configuration
+
+The bot uses embeddings for semantic search in the RAG system:
+
+```php config/config.php
+'rag' => [
+    'chunk_size' => 500,              // Characters per chunk
+    'chunk_overlap' => 50,            // Overlap between chunks
+    'top_k_results' => 3,             // Number of similar chunks to retrieve
+    'similarity_threshold' => 0.7,    // Minimum similarity score (0.0-1.0)
+    'similarity_method' => 'cosine'   // Similarity calculation method
+],
+```
+
+### How RAG Works
+
+<Steps>
+  <Step title="Document Processing">
+    Documents are split into chunks and converted to embeddings using your configured embedding model.
+  </Step>
+  
+  <Step title="Query Embedding">
+    User queries are converted to embeddings using the same model.
+  </Step>
+  
+  <Step title="Similarity Search">
+    The system finds the most similar document chunks using cosine similarity.
+  </Step>
+  
+  <Step title="Context Generation">
+    Top matching chunks are provided as context to the GPT model.
+  </Step>
+  
+  <Step title="Response Generation">
+    GPT generates a response based on the context and conversation history.
+  </Step>
+</Steps>
+
+## Error Handling
+
+### Insufficient Funds
+
+The system automatically detects when your OpenAI account has insufficient credits:
+
+```php webhook.php
+function handleInsufficientFunds($db, $e) {
+    if (strpos($e->getMessage(), 'INSUFFICIENT_FUNDS') !== false) {
+        $db->query(
+            "INSERT INTO settings (setting_key, setting_value) 
+             VALUES ('openai_status', 'insufficient_funds') 
+             ON DUPLICATE KEY UPDATE setting_value = 'insufficient_funds'",
+            []
+        );
+        return true;
+    }
+    return false;
+}
+```
+
+<Warning>
+  When OpenAI credits are depleted, the bot will use fallback messages. Monitor your usage at [platform.openai.com/usage](https://platform.openai.com/usage)
+</Warning>
+
+### Rate Limiting
+
+OpenAI has rate limits based on your account tier:
+
+- **Free tier**: Limited requests per minute
+- **Pay-as-you-go**: Higher limits based on usage history
+- **Enterprise**: Custom rate limits
+
+Implement retry logic or upgrade your account if you hit rate limits frequently.
+
+## Cost Optimization
+
+<Tabs>
+  <Tab title="Model Selection">
+    Choose models based on your budget:
+    
+    **Most Cost-Effective:**
+    ```php
+    'model' => 'gpt-3.5-turbo',
+    'embedding_model' => 'text-embedding-3-small'
+    ```
+    
+    **Balanced:**
+    ```php
+    'model' => 'gpt-4o-mini',
+    'embedding_model' => 'text-embedding-3-small'
+    ```
+    
+    **Best Quality:**
+    ```php
+    'model' => 'gpt-4',
+    'embedding_model' => 'text-embedding-3-large'
+    ```
+  </Tab>
+  
+  <Tab title="Token Management">
+    Reduce token usage:
+    
+    1. **Limit conversation history**:
+    ```sql
+    UPDATE settings 
+    SET setting_value = '3' 
+    WHERE setting_key = 'context_messages_count';
+    ```
+    
+    2. **Reduce max tokens**:
+    ```php
+    'max_tokens' => 300  // Shorter responses
+    ```
+    
+    3. **Optimize RAG chunks**:
+    ```php
+    'rag' => [
+        'top_k_results' => 2,  // Fewer context chunks
+        'chunk_size' => 400    // Smaller chunks
+    ]
+    ```
+  </Tab>
+  
+  <Tab title="Caching">
+    The system caches query embeddings to reduce API calls:
+    
+    ```sql database/schema.sql
+    CREATE TABLE IF NOT EXISTS query_embedding_cache (
+        query_hash VARCHAR(32) NOT NULL PRIMARY KEY,
+        embedding MEDIUMBLOB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        last_used_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        hit_count INT DEFAULT 0,
+        INDEX idx_last_used (last_used_at)
+    );
+    ```
+    
+    Cached embeddings are reused for identical queries, saving API costs.
+  </Tab>
+</Tabs>
+
+## Testing Your Configuration
+
+<Steps>
+  <Step title="Test API Connection">
+    Send a test message through the admin dashboard or directly via WhatsApp.
+  </Step>
+  
+  <Step title="Verify Embedding Generation">
+    Upload a test document and check if vectors are generated successfully.
+  </Step>
+  
+  <Step title="Test Audio Transcription">
+    Send a voice message (in AI mode) and verify it's transcribed correctly.
+  </Step>
+  
+  <Step title="Monitor Logs">
+    Check for any OpenAI API errors:
+    
+    ```bash
+    tail -f logs/app.log | grep -i openai
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Invalid API key error">
+    - Verify your API key is correct
+    - Check that the key hasn't been revoked
+    - Ensure there are no extra spaces or newlines
+    - Generate a new key at [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+  </Accordion>
+  
+  <Accordion title="Model not found error">
+    - Verify your account has access to the specified model
+    - Check for typos in the model name
+    - Some models require special access (e.g., GPT-4)
+    - Try using `gpt-3.5-turbo` as a fallback
+  </Accordion>
+  
+  <Accordion title="Rate limit exceeded">
+    - Reduce the number of concurrent requests
+    - Implement request queuing
+    - Upgrade your OpenAI account tier
+    - Add retry logic with exponential backoff
+  </Accordion>
+  
+  <Accordion title="Embedding dimension mismatch">
+    If you change embedding models, you must:
+    1. Clear the `vectors` table
+    2. Clear the `query_embedding_cache` table
+    3. Re-process all documents
+    
+    Different models have different dimensions:
+    - `text-embedding-ada-002`: 1536
+    - `text-embedding-3-small`: 1536
+    - `text-embedding-3-large`: 3072
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="System Settings" icon="gear" href="/configuration/system-settings">
+    Configure system prompts and bot behavior
+  </Card>
+  <Card title="Google Calendar" icon="calendar" href="/configuration/google-calendar">
+    Set up appointment scheduling
+  </Card>
+</CardGroup>

@@ -1,0 +1,544 @@
+---
+title: 'Google Calendar Integration'
+description: 'Configure Google Calendar OAuth for appointment scheduling'
+icon: 'calendar'
+---
+
+## Overview
+
+The WhatsApp RAG Bot integrates with Google Calendar to enable:
+
+- Appointment scheduling through conversational AI
+- Availability checking
+- Event creation with automatic reminders
+- Business hours management
+- Multi-timezone support
+
+## Prerequisites
+
+Before setting up Google Calendar integration:
+
+<Steps>
+  <Step title="Google Cloud Project">
+    Create a project in the [Google Cloud Console](https://console.cloud.google.com).
+  </Step>
+  
+  <Step title="Enable Calendar API">
+    Enable the Google Calendar API for your project.
+  </Step>
+  
+  <Step title="Create OAuth 2.0 Credentials">
+    Create OAuth 2.0 Client ID credentials (Web application type).
+  </Step>
+  
+  <Step title="Configure Redirect URI">
+    Add your OAuth callback URL to the authorized redirect URIs:
+    ```
+    https://yourdomain.com/admin/google-auth-callback.php
+    ```
+  </Step>
+</Steps>
+
+## OAuth Credentials
+
+You'll need these credentials from Google Cloud Console:
+
+### Client ID
+```
+Example: 123456789-abc123.apps.googleusercontent.com
+```
+
+### Client Secret
+```
+Example: GOCSPX-abc123def456
+```
+
+<Warning>
+  Keep your client secret secure. It will be encrypted before storage in the database.
+</Warning>
+
+## Configuration
+
+### Database Storage
+
+Google Calendar credentials are stored in the `google_oauth_credentials` table:
+
+```sql database/schema.sql
+CREATE TABLE IF NOT EXISTS google_oauth_credentials (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    client_id VARCHAR(255) DEFAULT '',
+    client_secret TEXT DEFAULT NULL,
+    access_token TEXT DEFAULT NULL,
+    refresh_token TEXT DEFAULT NULL,
+    token_expires_at TIMESTAMP NULL,
+    calendar_id VARCHAR(255) DEFAULT '',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+```
+
+<Info>
+  Fields encrypted with AES-256-CBC: `client_secret`, `access_token`, `refresh_token`
+</Info>
+
+### Calendar Settings Table
+
+Calendar configuration is stored separately:
+
+```sql database/schema.sql
+CREATE TABLE IF NOT EXISTS calendar_settings (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    setting_key VARCHAR(100) NOT NULL UNIQUE,
+    setting_value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+```
+
+### Default Configuration
+
+```php config/calendar.php
+return [
+    'enabled' => getenv('CALENDAR_ENABLED') !== 'false',
+    
+    'credentials' => [
+        'access_token' => getenv('GOOGLE_CALENDAR_ACCESS_TOKEN'),
+        'refresh_token' => getenv('GOOGLE_CALENDAR_REFRESH_TOKEN'),
+        'client_id' => getenv('GOOGLE_CALENDAR_CLIENT_ID'),
+        'client_secret' => getenv('GOOGLE_CALENDAR_CLIENT_SECRET'),
+        'calendar_id' => getenv('GOOGLE_CALENDAR_ID') ?: 'primary'
+    ],
+    
+    'timezone' => 'America/Bogota',
+    'default_duration_minutes' => 60,
+    'max_events_per_day' => 10,
+    'min_advance_hours' => 1,
+    
+    'business_hours' => [
+        'monday' => ['start' => '09:00', 'end' => '18:00'],
+        'tuesday' => ['start' => '09:00', 'end' => '18:00'],
+        'wednesday' => ['start' => '09:00', 'end' => '18:00'],
+        'thursday' => ['start' => '09:00', 'end' => '18:00'],
+        'friday' => ['start' => '09:00', 'end' => '18:00'],
+        'saturday' => ['start' => '10:00', 'end' => '14:00'],
+        'sunday' => null  // Closed
+    ],
+    
+    'reminders' => [
+        'email' => [
+            'enabled' => true,
+            'minutes_before' => 24 * 60  // 1 day
+        ],
+        'popup' => [
+            'enabled' => true,
+            'minutes_before' => 30
+        ]
+    ]
+];
+```
+
+## Calendar Settings
+
+### Timezone Configuration
+
+Set your business timezone:
+
+```sql
+INSERT INTO calendar_settings (setting_key, setting_value) 
+VALUES ('timezone', 'America/New_York')
+ON DUPLICATE KEY UPDATE setting_value = 'America/New_York';
+```
+
+Supported timezones follow the [IANA timezone database](https://www.iana.org/time-zones).
+
+### Default Duration
+
+Set the default appointment duration in minutes:
+
+```sql
+INSERT INTO calendar_settings (setting_key, setting_value) 
+VALUES ('default_duration_minutes', '45')
+ON DUPLICATE KEY UPDATE setting_value = '45';
+```
+
+### Business Hours
+
+Configure business hours for each day of the week:
+
+```sql
+-- Monday
+INSERT INTO calendar_settings (setting_key, setting_value) 
+VALUES ('business_hours_monday', '{"enabled":true,"start":"09:00","end":"17:00"}')
+ON DUPLICATE KEY UPDATE setting_value = '{"enabled":true,"start":"09:00","end":"17:00"}';
+
+-- Sunday (closed)
+INSERT INTO calendar_settings (setting_key, setting_value) 
+VALUES ('business_hours_sunday', '{"enabled":false,"start":"09:00","end":"18:00"}')
+ON DUPLICATE KEY UPDATE setting_value = '{"enabled":false,"start":"09:00","end":"18:00"}';
+```
+
+### Maximum Events Per Day
+
+Limit the number of appointments per day:
+
+```sql
+INSERT INTO calendar_settings (setting_key, setting_value) 
+VALUES ('max_events_per_day', '8')
+ON DUPLICATE KEY UPDATE setting_value = '8';
+```
+
+### Minimum Advance Time
+
+Set minimum hours in advance for booking:
+
+```sql
+INSERT INTO calendar_settings (setting_key, setting_value) 
+VALUES ('min_advance_hours', '2')
+ON DUPLICATE KEY UPDATE setting_value = '2';
+```
+
+## Loading Configuration
+
+The `CalendarConfigHelper` loads settings from the database:
+
+```php src/Helpers/CalendarConfigHelper.php
+public static function loadFromDatabase($db)
+{
+    $defaults = require __DIR__ . '/../../config/calendar.php';
+    
+    try {
+        $settings = $db->fetchAll(
+            "SELECT setting_key, setting_value FROM calendar_settings", 
+            []
+        );
+        
+        foreach ($settings as $setting) {
+            $key = $setting['setting_key'];
+            $value = $setting['setting_value'];
+            
+            switch ($key) {
+                case 'timezone':
+                    $defaults['timezone'] = $value;
+                    break;
+                
+                case 'default_duration_minutes':
+                    $defaults['default_duration_minutes'] = (int)$value;
+                    break;
+                
+                case 'business_hours_monday':
+                case 'business_hours_tuesday':
+                // ... etc
+                    $day = substr($key, 15);
+                    $dayData = json_decode($value, true);
+                    if ($dayData && isset($dayData['enabled'])) {
+                        $defaults['business_hours'][$day] = $dayData['enabled'] 
+                            ? ['start' => $dayData['start'], 'end' => $dayData['end']]
+                            : null;
+                    }
+                    break;
+            }
+        }
+    } catch (\Exception $e) {
+        // Falls back to config file defaults
+    }
+    
+    return $defaults;
+}
+```
+
+## Calendar Service
+
+The `GoogleCalendarService` handles all calendar operations:
+
+### Initialization
+
+```php webhook.php
+function getCalendarService($logger, $db, $credentialService = null, $calendarConfig = null) {
+    if ($calendarConfig === null) {
+        $calendarConfig = \App\Helpers\CalendarConfigHelper::loadFromDatabase($db);
+    }
+    
+    if (!$calendarConfig['enabled']) {
+        return null;
+    }
+    
+    if ($credentialService) {
+        $credentials = $credentialService->getGoogleOAuthCredentials();
+    } else {
+        $credentials = $calendarConfig['credentials'];
+    }
+    
+    if (empty($credentials['access_token'])) {
+        return null;
+    }
+    
+    return new \App\Services\GoogleCalendarService(
+        $credentials['access_token'],
+        $credentials['calendar_id'],
+        $logger,
+        $calendarConfig['timezone'],
+        $credentials['refresh_token'],
+        $credentials['client_id'],
+        $credentials['client_secret'],
+        $db
+    );
+}
+```
+
+### Calendar Operations
+
+<Tabs>
+  <Tab title="Create Event">
+    ```php
+    $calendarService = getCalendarService($logger, $db, $credentialService);
+    
+    $event = $calendarService->createEvent([
+        'summary' => 'Client Consultation',
+        'description' => 'Meeting with John Doe',
+        'start' => '2024-03-15T10:00:00',
+        'end' => '2024-03-15T11:00:00',
+        'attendees' => ['client@example.com'],
+        'reminders' => [
+            'email' => ['minutes_before' => 1440],  // 1 day
+            'popup' => ['minutes_before' => 30]
+        ]
+    ]);
+    ```
+  </Tab>
+  
+  <Tab title="Check Availability">
+    ```php
+    $availableSlots = $calendarService->getAvailableSlots(
+        $date = '2024-03-15',
+        $duration = 60,  // minutes
+        $businessHours = ['start' => '09:00', 'end' => '18:00']
+    );
+    
+    // Returns:
+    [
+        '09:00',
+        '10:00',
+        '14:00',
+        '16:00'
+    ]
+    ```
+  </Tab>
+  
+  <Tab title="List Events">
+    ```php
+    $events = $calendarService->listEvents(
+        $startDate = '2024-03-15',
+        $endDate = '2024-03-22'
+    );
+    
+    foreach ($events as $event) {
+        echo $event['summary'];
+        echo $event['start'];
+        echo $event['end'];
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Cancel Event">
+    ```php
+    $calendarService->deleteEvent($eventId);
+    ```
+  </Tab>
+</Tabs>
+
+## Token Refresh
+
+Google Calendar access tokens expire after 1 hour. The service automatically refreshes them:
+
+```php src/Services/GoogleCalendarService.php
+private function refreshAccessToken()
+{
+    $response = $this->client->post('https://oauth2.googleapis.com/token', [
+        'form_params' => [
+            'client_id' => $this->clientId,
+            'client_secret' => $this->clientSecret,
+            'refresh_token' => $this->refreshToken,
+            'grant_type' => 'refresh_token'
+        ]
+    ]);
+    
+    $data = json_decode($response->getBody()->getContents(), true);
+    $newAccessToken = $data['access_token'];
+    $expiresIn = $data['expires_in'];
+    
+    // Update in database
+    $this->updateAccessToken($newAccessToken, $expiresIn);
+    
+    return $newAccessToken;
+}
+```
+
+<Info>
+  Refresh tokens are long-lived and used to obtain new access tokens automatically.
+</Info>
+
+## Calendar Modes
+
+The bot supports calendar integration in two modes:
+
+### AI Mode
+
+Conversational appointment scheduling:
+
+```php webhook.php
+$intentService = new CalendarIntentService($openai, $logger);
+$intent = $intentService->detectIntent(
+    $messageData['text'], 
+    $conversationHistory, 
+    $systemPrompt
+);
+
+if ($intent['intent'] !== 'none') {
+    $flowResult = $flowHandler->startFlow(
+        $intent['intent'], 
+        $intent['extracted_data'], 
+        $conversation, 
+        $messageData
+    );
+}
+```
+
+Detected intents:
+- `schedule`: Schedule new appointment
+- `check_availability`: Check available times
+- `cancel_appointment`: Cancel existing appointment
+- `list_appointments`: List upcoming appointments
+
+### Classic Mode
+
+Menu-driven appointment scheduling:
+
+```php
+$classicCalHandler = new ClassicCalendarFlowHandler(
+    $db, 
+    $logger, 
+    $calendarService, 
+    $timezone
+);
+
+if ($classicCalHandler->hasActiveSession($phoneNumber)) {
+    $result = $classicCalHandler->handleStep(
+        $messageText,
+        $phoneNumber,
+        $contactName
+    );
+}
+```
+
+## Reminders Configuration
+
+### Email Reminders
+
+```sql
+INSERT INTO calendar_settings (setting_key, setting_value) 
+VALUES 
+  ('reminder_email_enabled', 'true'),
+  ('reminder_email_minutes', '1440')  -- 24 hours
+ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
+```
+
+### Popup Reminders
+
+```sql
+INSERT INTO calendar_settings (setting_key, setting_value) 
+VALUES 
+  ('reminder_popup_enabled', 'true'),
+  ('reminder_popup_minutes', '30')
+ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
+```
+
+## Enabling/Disabling Calendar
+
+Toggle calendar functionality:
+
+```sql
+-- Enable calendar
+INSERT INTO settings (setting_key, setting_value, setting_type) 
+VALUES ('calendar_enabled', 'true', 'boolean')
+ON DUPLICATE KEY UPDATE setting_value = 'true';
+
+-- Disable calendar
+UPDATE settings 
+SET setting_value = 'false' 
+WHERE setting_key = 'calendar_enabled';
+```
+
+```php config/calendar.php
+'enabled' => getenv('CALENDAR_ENABLED') !== 'false'
+```
+
+## Testing Your Configuration
+
+<Steps>
+  <Step title="Complete OAuth Flow">
+    Navigate to the Google Calendar settings in the admin dashboard and complete the OAuth authorization.
+  </Step>
+  
+  <Step title="Verify Credentials">
+    Check that credentials are stored in the database:
+    
+    ```sql
+    SELECT id, client_id, calendar_id, token_expires_at 
+    FROM google_oauth_credentials;
+    ```
+  </Step>
+  
+  <Step title="Test Event Creation">
+    Send a message like "I need to schedule an appointment for tomorrow at 2pm".
+  </Step>
+  
+  <Step title="Check Google Calendar">
+    Verify the event appears in your Google Calendar.
+  </Step>
+  
+  <Step title="Test Availability">
+    Ask "What times are available on Monday?"
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="OAuth authorization fails">
+    - Verify your redirect URI matches exactly in Google Cloud Console
+    - Check that the Calendar API is enabled
+    - Ensure your OAuth consent screen is configured
+    - Try revoking access and re-authorizing
+  </Accordion>
+  
+  <Accordion title="Token expired errors">
+    - Check if `token_expires_at` is in the past
+    - Verify refresh token is valid
+    - Ensure token refresh logic is working
+    - Re-authorize if refresh token is invalid
+  </Accordion>
+  
+  <Accordion title="Events not appearing in calendar">
+    - Verify the `calendar_id` is correct (use 'primary' for main calendar)
+    - Check timezone configuration matches your calendar
+    - Ensure you have write permissions to the calendar
+    - Look for errors in application logs
+  </Accordion>
+  
+  <Accordion title="Wrong business hours">
+    - Check `calendar_settings` table for correct values
+    - Verify timezone is set correctly
+    - Ensure business hours JSON is properly formatted
+    - Clear cache if using any caching layer
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="System Settings" icon="gear" href="/configuration/system-settings">
+    Configure bot personality and behavior
+  </Card>
+  <Card title="Credentials" icon="key" href="/configuration/credentials">
+    Learn about credential security
+  </Card>
+</CardGroup>

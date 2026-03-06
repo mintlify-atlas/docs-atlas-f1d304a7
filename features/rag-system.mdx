@@ -1,0 +1,366 @@
+---
+title: RAG System
+description: Retrieval-Augmented Generation (RAG) architecture for document-based AI responses
+icon: database
+---
+
+## Overview
+
+The RAG system enables the bot to provide accurate, context-aware responses by retrieving relevant information from your indexed documents. It combines vector search with OpenAI's language models to deliver precise answers based on your knowledge base.
+
+## Architecture
+
+The RAG pipeline consists of three main components:
+
+<CardGroup cols={3}>
+  <Card title="Document Indexing" icon="file-arrow-up">
+    Chunks and vectorizes documents for efficient retrieval
+  </Card>
+  <Card title="Vector Search" icon="magnifying-glass">
+    Finds similar content using cosine similarity
+  </Card>
+  <Card title="Response Generation" icon="sparkles">
+    Generates answers using retrieved context
+  </Card>
+</CardGroup>
+
+## How It Works
+
+<Steps>
+  <Step title="Query Embedding">
+    When a user sends a message, it's converted into a 1536-dimension vector using OpenAI's `text-embedding-3-small` model. The system checks the embedding cache first to improve performance.
+    
+    ```php src/Services/RAGService.php
+    private function getCachedOrCreateEmbedding($userMessage)
+    {
+        $normalized = trim(mb_strtolower($userMessage));
+        $queryHash = md5($normalized);
+
+        // Check cache (24-hour TTL)
+        $cached = $this->db->fetchOne(
+            'SELECT embedding FROM query_embedding_cache 
+             WHERE query_hash = :hash AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)',
+            [':hash' => $queryHash]
+        );
+
+        if ($cached && !empty($cached['embedding'])) {
+            return VectorMath::unserializeVector($cached['embedding']);
+        }
+
+        // Create new embedding
+        $embedding = $this->openai->createEmbedding($userMessage);
+        
+        // Store in cache
+        $this->db->query(
+            'INSERT INTO query_embedding_cache (query_hash, embedding, created_at, last_used_at, hit_count)
+             VALUES (:hash, :embedding, NOW(), NOW(), 0)',
+            [':hash' => $queryHash, ':embedding' => VectorMath::serializeVector($embedding)]
+        );
+
+        return $embedding;
+    }
+    ```
+  </Step>
+  
+  <Step title="Similarity Search">
+    The system searches for the most similar document chunks using cosine similarity. It retrieves the top K results (default: 3) that exceed the confidence threshold (default: 0.7).
+    
+    ```php src/Services/VectorSearchService.php
+    public function searchSimilar(array $queryEmbedding, $topK = 5, $threshold = 0.0, $maxCandidates = 200)
+    {
+        // Fetch candidate vectors from active documents
+        $vectors = $this->db->fetchAll(
+            "SELECT v.id, v.document_id, v.chunk_text, v.chunk_index, v.embedding, 
+                    d.filename, d.original_name 
+             FROM vectors v 
+             INNER JOIN documents d ON v.document_id = d.id 
+             WHERE d.is_active = 1
+             ORDER BY RAND()
+             LIMIT {$maxCandidates}"
+        );
+        
+        $results = [];
+        
+        foreach ($vectors as $vector) {
+            $storedEmbedding = VectorMath::unserializeVector($vector['embedding']);
+            
+            // Calculate cosine similarity
+            $score = VectorMath::cosineSimilarity($queryEmbedding, $storedEmbedding);
+
+            if ($score >= $threshold) {
+                $results[] = [
+                    'id' => $vector['id'],
+                    'document_id' => $vector['document_id'],
+                    'chunk_text' => $vector['chunk_text'],
+                    'score' => $score,
+                    'original_name' => $vector['original_name']
+                ];
+            }
+        }
+
+        // Sort by score and return top K
+        usort($results, function($a, $b) {
+            return $b['score'] <=> $a['score'];
+        });
+
+        return array_slice($results, 0, $topK);
+    }
+    ```
+  </Step>
+  
+  <Step title="Context Assembly">
+    Retrieved chunks are combined into a context string, along with their source documents and confidence scores.
+    
+    ```php src/Services/RAGService.php
+    $contextParts = [];
+    $sources = [];
+    $maxScore = 0;
+
+    foreach ($similarChunks as $chunk) {
+        $contextParts[] = $chunk['chunk_text'];
+        $sources[] = [
+            'document' => $chunk['original_name'],
+            'score' => $chunk['score']
+        ];
+        $maxScore = max($maxScore, $chunk['score']);
+    }
+
+    $context = implode("\n\n", $contextParts);
+    ```
+  </Step>
+  
+  <Step title="Response Generation">
+    The assembled context is passed to OpenAI's chat completion API along with the user's question to generate a grounded response.
+    
+    ```php src/Services/RAGService.php
+    public function generateResponse($userMessage, $systemPrompt = null, 
+                                      $conversationHistory = [], $temperature = 0.7, $maxTokens = 500)
+    {
+        // Get query embedding (cached or new)
+        $queryEmbedding = $this->getCachedOrCreateEmbedding($userMessage);
+        
+        // Search for similar chunks
+        $similarChunks = $this->vectorSearch->searchSimilar(
+            $queryEmbedding,
+            $this->topK,      // Default: 3
+            $this->threshold  // Default: 0.7
+        );
+
+        if (empty($similarChunks)) {
+            return [
+                'response' => null,
+                'context' => '',
+                'confidence' => 0.0,
+                'sources' => []
+            ];
+        }
+
+        // Assemble context from chunks
+        $context = implode("\n\n", array_column($similarChunks, 'chunk_text'));
+        
+        // Generate response using OpenAI
+        $response = $this->openai->generateResponse(
+            $userMessage, 
+            $context, 
+            $systemPrompt, 
+            $temperature, 
+            $maxTokens, 
+            $conversationHistory
+        );
+
+        return [
+            'response' => $response,
+            'context' => $context,
+            'confidence' => $maxScore,
+            'sources' => $sources
+        ];
+    }
+    ```
+  </Step>
+</Steps>
+
+## Document Indexing
+
+Before the RAG system can answer questions, documents must be indexed:
+
+### Text Chunking
+
+Documents are split into overlapping chunks to maintain context:
+
+```php src/Services/RAGService.php
+public function indexDocument($documentId, $text, $chunkSize = 500, $overlap = 50)
+{
+    $this->logger->info('RAG: Indexing document', ['document_id' => $documentId]);
+
+    // Split text into chunks with overlap
+    $chunks = \App\Utils\TextProcessor::chunkText($text, $chunkSize, $overlap);
+    
+    // Create embeddings for all chunks
+    $embeddings = $this->openai->createBatchEmbeddings($chunks);
+
+    // Store vectors in database
+    $indexed = 0;
+    foreach ($chunks as $index => $chunk) {
+        if ($embeddings[$index] !== null) {
+            $this->vectorSearch->storeVector($documentId, $chunk, $index, $embeddings[$index]);
+            $indexed++;
+        }
+    }
+
+    $this->logger->info('RAG: Document indexed', [
+        'document_id' => $documentId,
+        'chunks' => $indexed
+    ]);
+
+    return $indexed;
+}
+```
+
+<Note>
+**Default chunk parameters:**
+- Chunk size: 500 characters
+- Overlap: 50 characters
+- This ensures context continuity between chunks
+</Note>
+
+## Embedding Cache
+
+The system caches query embeddings to reduce API calls and improve response time:
+
+<CardGroup cols={2}>
+  <Card title="Cache TTL" icon="clock">
+    24 hours per query
+  </Card>
+  <Card title="Auto-Cleanup" icon="broom">
+    Removes entries unused for 7+ days
+  </Card>
+</CardGroup>
+
+### Cache Benefits
+
+- **Reduces API costs**: Repeated queries don't require new embeddings
+- **Faster responses**: No API roundtrip for cached queries
+- **Hit tracking**: Monitors cache effectiveness
+
+```php
+// Cache structure
+query_embedding_cache:
+  - query_hash (MD5 of normalized query)
+  - embedding (binary serialized vector)
+  - created_at (timestamp)
+  - last_used_at (updated on cache hit)
+  - hit_count (incremented on each use)
+```
+
+## Similarity Search Methods
+
+The system supports two similarity calculation methods:
+
+<Tabs>
+  <Tab title="Cosine Similarity (Default)">
+    Measures the cosine of the angle between two vectors. Best for text embeddings.
+    
+    ```php
+    $score = VectorMath::cosineSimilarity($queryEmbedding, $storedEmbedding);
+    ```
+    
+    - Range: -1 to 1 (1 = identical)
+    - Normalizes for vector magnitude
+    - Recommended for most use cases
+  </Tab>
+  
+  <Tab title="Euclidean Distance">
+    Measures the straight-line distance between vectors.
+    
+    ```php
+    $distance = VectorMath::euclideanDistance($queryEmbedding, $storedEmbedding);
+    $score = 1 / (1 + $distance);
+    ```
+    
+    - Lower distance = higher similarity
+    - Converted to 0-1 score for consistency
+    - Configure in `config/config.php`:
+    ```php
+    'rag' => [
+        'similarity_method' => 'euclidean'
+    ]
+    ```
+  </Tab>
+</Tabs>
+
+## Configuration
+
+Configure RAG behavior in the settings:
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `topK` | 3 | Number of chunks to retrieve |
+| `threshold` | 0.7 | Minimum similarity score (0-1) |
+| `max_candidates` | 200 | Max vectors to scan per query |
+| `chunk_size` | 500 | Characters per chunk |
+| `overlap` | 50 | Character overlap between chunks |
+
+## Performance Optimization
+
+<Steps>
+  <Step title="Embedding Cache">
+    Caches query embeddings for 24 hours, reducing OpenAI API calls for repeated queries.
+  </Step>
+  
+  <Step title="Binary Vector Storage">
+    Vectors are serialized to binary format, reducing database size and improving I/O performance.
+  </Step>
+  
+  <Step title="Active Document Filter">
+    Only searches vectors from documents marked as `is_active = 1`, skipping disabled content.
+  </Step>
+  
+  <Step title="Candidate Sampling">
+    Limits vector comparisons to a random sample (`max_candidates`) for large knowledge bases.
+  </Step>
+</Steps>
+
+## Confidence Scoring
+
+The system returns a confidence score with each response:
+
+- **High confidence (≥0.7)**: Direct response sent to user
+- **Low confidence (&lt;0.7)**: Falls back to general OpenAI response
+- **No results**: System prompt-based response or human handoff
+
+```php webhook.php
+$result = $rag->generateResponse($messageData['text'], $systemPrompt, 
+                                  $conversationHistory, $openaiTemperature, $openaiMaxTokens);
+
+if ($result['response'] && $result['confidence'] >= 0.7) {
+    // High confidence - use RAG response
+    $whatsapp->sendMessage($conversation['phone_number'], $result['response']);
+} else {
+    // Low confidence - fallback to general AI
+    $fallbackResponse = $openai->generateResponse($messageData['text'], '', $systemPrompt);
+    $whatsapp->sendMessage($conversation['phone_number'], $fallbackResponse);
+}
+```
+
+## Best Practices
+
+<Warning>
+**Important considerations for optimal RAG performance:**
+</Warning>
+
+1. **Document Quality**: Index well-structured, relevant documents
+2. **Chunk Size**: Adjust based on document structure (500 is optimal for most content)
+3. **Threshold Tuning**: Lower threshold (0.6) for broader matches, higher (0.8) for precision
+4. **Regular Updates**: Keep documents current and re-index when content changes
+5. **Monitor Confidence**: Track confidence scores to identify knowledge gaps
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Document Upload" icon="file-arrow-up" href="/api/documents/upload">
+    Learn how to upload and index documents
+  </Card>
+  <Card title="AI Conversations" icon="comments" href="/features/ai-conversations">
+    Explore how RAG integrates with AI responses
+  </Card>
+</CardGroup>

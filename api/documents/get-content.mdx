@@ -1,0 +1,304 @@
+---
+title: 'Get Document Content'
+api: 'GET /api/get-document-content'
+description: 'Retrieve the text content and chunks of a document'
+---
+
+## Overview
+
+This endpoint retrieves the chunked text content of a document as stored in the RAG vector database. It returns:
+
+- Individual text chunks with their index positions
+- Combined content with chunk separators
+- Total chunk count
+
+This is useful for previewing document content, debugging RAG indexing, and understanding how documents are split for semantic search.
+
+## Request
+
+<ParamField query="id" type="integer" required>
+  The unique identifier of the document
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates whether the request succeeded
+</ResponseField>
+
+<ResponseField name="chunks" type="array" required>
+  Array of chunk objects ordered by chunk index
+  
+  <ResponseField name="chunks[].chunk_text" type="string">
+    The text content of this chunk
+  </ResponseField>
+  
+  <ResponseField name="chunks[].chunk_index" type="integer">
+    The position of this chunk in the original document (0-based)
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="content" type="string" required>
+  All chunks joined together with separator `\n\n---\n\n` between each chunk
+</ResponseField>
+
+<ResponseField name="chunk_count" type="integer" required>
+  Total number of chunks in the document
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the request failed
+</ResponseField>
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET "https://your-domain.com/api/get-document-content?id=42"
+```
+
+```javascript JavaScript
+const documentId = 42;
+
+const response = await fetch(`/api/get-document-content?id=${documentId}`);
+const result = await response.json();
+
+console.log(`Document has ${result.chunk_count} chunks`);
+console.log('Full content:', result.content);
+
+// Access individual chunks
+result.chunks.forEach((chunk, i) => {
+  console.log(`Chunk ${chunk.chunk_index}: ${chunk.chunk_text.substring(0, 50)}...`);
+});
+```
+
+```python Python
+import requests
+
+document_id = 42
+response = requests.get(
+    f'https://your-domain.com/api/get-document-content?id={document_id}'
+)
+
+result = response.json()
+print(f"Document has {result['chunk_count']} chunks")
+
+for chunk in result['chunks']:
+    print(f"Chunk {chunk['chunk_index']}: {chunk['chunk_text'][:50]}...")
+```
+
+```php PHP
+$documentId = 42;
+
+$response = file_get_contents(
+    "https://your-domain.com/api/get-document-content?id={$documentId}"
+);
+$result = json_decode($response, true);
+
+echo "Document has {$result['chunk_count']} chunks\n";
+
+foreach ($result['chunks'] as $chunk) {
+    echo "Chunk {$chunk['chunk_index']}: " . 
+         substr($chunk['chunk_text'], 0, 50) . "...\n";
+}
+```
+
+</CodeGroup>
+
+## Success Response
+
+```json
+{
+  "success": true,
+  "chunks": [
+    {
+      "chunk_text": "Welcome to our company handbook. This document outlines our policies, procedures, and company culture. Our mission is to provide exceptional service while maintaining a positive work environment.",
+      "chunk_index": 0
+    },
+    {
+      "chunk_text": "Employee Benefits: We offer comprehensive health insurance, 401(k) matching, unlimited PTO, and professional development opportunities. All employees are eligible for benefits after 30 days of employment.",
+      "chunk_index": 1
+    },
+    {
+      "chunk_text": "Work Schedule: Our standard work week is Monday through Friday, 9 AM to 5 PM. Remote work options are available for eligible positions. Please discuss flexible arrangements with your manager.",
+      "chunk_index": 2
+    }
+  ],
+  "content": "Welcome to our company handbook. This document outlines our policies, procedures, and company culture. Our mission is to provide exceptional service while maintaining a positive work environment.\n\n---\n\nEmployee Benefits: We offer comprehensive health insurance, 401(k) matching, unlimited PTO, and professional development opportunities. All employees are eligible for benefits after 30 days of employment.\n\n---\n\nWork Schedule: Our standard work week is Monday through Friday, 9 AM to 5 PM. Remote work options are available for eligible positions. Please discuss flexible arrangements with your manager.",
+  "chunk_count": 3
+}
+```
+
+## Error Responses
+
+### Missing ID Parameter
+
+```json
+{
+  "success": false,
+  "error": "Error al obtener contenido del documento"
+}
+```
+
+### Document Not Found
+
+If the document ID doesn't exist, the endpoint returns an empty chunk array:
+
+```json
+{
+  "success": true,
+  "chunks": [],
+  "content": "",
+  "chunk_count": 0
+}
+```
+
+## Implementation Details
+
+### Query Logic
+
+The endpoint queries the `vectors` table directly (api/get-document-content.php:15-18):
+
+```php
+$chunks = $db->fetchAll(
+    'SELECT chunk_text, chunk_index FROM vectors WHERE document_id = :id ORDER BY chunk_index ASC',
+    [':id' => $id]
+);
+```
+
+This retrieves all chunks for the document ordered by their position in the original text.
+
+### Content Joining
+
+Chunks are joined with a visual separator (api/get-document-content.php:20):
+
+```php
+$content = implode("\n\n---\n\n", array_column($chunks, 'chunk_text'));
+```
+
+The separator `\n\n---\n\n` makes it easy to visually distinguish between chunks when displaying the full content.
+
+### Chunk Ordering
+
+Chunks are always returned in order by `chunk_index ASC`, ensuring the content appears in the same sequence as the original document.
+
+## Use Cases
+
+### Document Preview
+
+Display a preview of document content before processing:
+
+```javascript
+const { content, chunk_count } = await fetch(
+  `/api/get-document-content?id=${docId}`
+).then(r => r.json());
+
+// Show first 500 characters as preview
+const preview = content.substring(0, 500) + '...';
+console.log(`Preview (${chunk_count} chunks total):\n${preview}`);
+```
+
+### Chunk Analysis
+
+Analyze chunk sizes and distribution:
+
+```javascript
+const { chunks } = await fetch(
+  `/api/get-document-content?id=${docId}`
+).then(r => r.json());
+
+const chunkLengths = chunks.map(c => c.chunk_text.length);
+const avgLength = chunkLengths.reduce((a, b) => a + b, 0) / chunks.length;
+const maxLength = Math.max(...chunkLengths);
+const minLength = Math.min(...chunkLengths);
+
+console.log(`Avg: ${avgLength}, Min: ${minLength}, Max: ${maxLength}`);
+```
+
+### RAG Debugging
+
+Inspect how a document was chunked for troubleshooting:
+
+```javascript
+const { chunks } = await fetch(
+  `/api/get-document-content?id=${docId}`
+).then(r => r.json());
+
+// Find chunks containing specific keywords
+const keyword = 'pricing';
+const relevantChunks = chunks.filter(c => 
+  c.chunk_text.toLowerCase().includes(keyword)
+);
+
+console.log(`Found "${keyword}" in ${relevantChunks.length} chunks:`);
+relevantChunks.forEach(c => {
+  console.log(`  Chunk ${c.chunk_index}: ${c.chunk_text.substring(0, 100)}...`);
+});
+```
+
+### Export to Text File
+
+Export document content as plain text:
+
+```javascript
+const { content } = await fetch(
+  `/api/get-document-content?id=${docId}`
+).then(r => r.json());
+
+const blob = new Blob([content], { type: 'text/plain' });
+const url = URL.createObjectURL(blob);
+
+const a = document.createElement('a');
+a.href = url;
+a.download = 'document-content.txt';
+a.click();
+```
+
+### Search Within Document
+
+Search for text within a specific document:
+
+```javascript
+async function searchInDocument(docId, searchTerm) {
+  const { chunks } = await fetch(
+    `/api/get-document-content?id=${docId}`
+  ).then(r => r.json());
+  
+  const results = chunks
+    .map(chunk => ({
+      index: chunk.chunk_index,
+      text: chunk.chunk_text,
+      matches: (chunk.chunk_text.match(
+        new RegExp(searchTerm, 'gi')
+      ) || []).length
+    }))
+    .filter(r => r.matches > 0)
+    .sort((a, b) => b.matches - a.matches);
+  
+  return results;
+}
+
+const results = await searchInDocument(42, 'customer service');
+console.log(`Found ${results.length} chunks with matches`);
+```
+
+## Chunk Structure
+
+Each chunk in the response contains:
+
+- **chunk_text**: The actual text content extracted from the document
+- **chunk_index**: Zero-based position in the document (0, 1, 2, ...)
+
+Chunks are created during the upload process with configurable size and overlap:
+
+- **Chunk Size**: Typically 500-1000 tokens (configured via `rag.chunk_size`)
+- **Chunk Overlap**: Typically 50-200 tokens (configured via `rag.chunk_overlap`)
+
+Overlap ensures semantic continuity between chunks for better RAG retrieval.
+
+## Related Endpoints
+
+- [Upload Document](/api/documents/upload) - Upload and create chunks
+- [Get Documents](/api/documents/get-documents) - List all documents
+- [Delete Document](/api/documents/delete) - Remove document and chunks

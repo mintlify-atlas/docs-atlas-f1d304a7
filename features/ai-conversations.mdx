@@ -1,0 +1,479 @@
+---
+title: AI Conversations
+description: Intelligent conversations powered by OpenAI with RAG, audio transcription, and tool calling
+icon: comments
+---
+
+## Overview
+
+The AI conversation system provides intelligent, context-aware interactions using OpenAI's GPT models. It supports two operational modes, audio message transcription, and advanced tool calling for calendar integration.
+
+## Bot Modes
+
+The system operates in two distinct modes:
+
+<Tabs>
+  <Tab title="AI Mode (Default)">
+    Uses OpenAI with RAG for intelligent, document-grounded responses.
+    
+    ```php webhook.php
+    $botModeRow = $db->fetchOne(
+        "SELECT setting_value FROM settings WHERE setting_key = 'bot_mode'",
+        []
+    );
+    $botMode = $botModeRow['setting_value'] ?? 'ai';
+    ```
+    
+    **Features:**
+    - RAG-based knowledge retrieval
+    - Conversation history context
+    - Audio message support (Whisper)
+    - Calendar intent detection
+    - Dynamic system prompts
+  </Tab>
+  
+  <Tab title="Classic Mode">
+    Rule-based flow builder for structured conversations.
+    
+    ```php webhook.php
+    if ($botMode === 'classic') {
+        $classicBot = new ClassicBotService($db, $logger);
+        $classicResult = $classicBot->processMessage($messageData['text'], $messageData['from']);
+        
+        if ($classicResult['type'] === 'response') {
+            $whatsapp->sendMessage($messageData['from'], $classicResult['response']);
+        }
+    }
+    ```
+    
+    **Features:**
+    - Keyword-based navigation
+    - Predefined conversation flows
+    - Text-only (no audio support)
+    - Optional calendar integration
+    - Session management
+  </Tab>
+</Tabs>
+
+## OpenAI Integration
+
+The system integrates with OpenAI for multiple capabilities:
+
+### Chat Completion
+
+Generates conversational responses using GPT models:
+
+```php src/Services/OpenAIService.php
+public function generateResponse($prompt, $context = '', $systemPrompt = null, 
+                                  $temperature = 0.7, $maxTokens = 500, 
+                                  $conversationHistory = [], $modelOverride = null)
+{
+    $systemMessage = $systemPrompt ?? 'Eres un asistente virtual útil y amigable.';
+    
+    $messages = [
+        ['role' => 'system', 'content' => $systemMessage]
+    ];
+    
+    // Add context from RAG
+    if (!empty($context)) {
+        $messages[] = [
+            'role' => 'system',
+            'content' => "Contexto relevante:\n" . $context
+        ];
+    }
+    
+    // Include conversation history
+    if (!empty($conversationHistory)) {
+        foreach ($conversationHistory as $historyMsg) {
+            $role = $historyMsg['sender'] === 'bot' ? 'assistant' : 'user';
+            $messages[] = [
+                'role' => $role,
+                'content' => $historyMsg['message_text']
+            ];
+        }
+    }
+    
+    // Add current user message
+    $messages[] = ['role' => 'user', 'content' => $prompt];
+
+    $response = $this->client->post('chat/completions', [
+        'json' => [
+            'model' => $modelOverride ?? $this->model,
+            'messages' => $messages,
+            'temperature' => $temperature,
+            'max_tokens' => $maxTokens
+        ]
+    ]);
+
+    $data = json_decode($response->getBody()->getContents(), true);
+    
+    return $data['choices'][0]['message']['content'];
+}
+```
+
+<Note>
+**Default configuration:**
+- Model: `gpt-4o-mini` (configurable)
+- Temperature: 0.7 (balanced creativity/consistency)
+- Max tokens: 500 (sufficient for WhatsApp messages)
+</Note>
+
+### Embeddings
+
+Creates vector representations for RAG:
+
+```php src/Services/OpenAIService.php
+public function createEmbedding($text)
+{
+    $response = $this->client->post('embeddings', [
+        'json' => [
+            'model' => $this->embeddingModel, // text-embedding-3-small
+            'input' => $text
+        ]
+    ]);
+
+    $data = json_decode($response->getBody()->getContents(), true);
+    
+    return $data['data'][0]['embedding']; // 1536-dimension vector
+}
+```
+
+## Audio Transcription (Whisper)
+
+AI mode supports audio messages through OpenAI's Whisper model:
+
+<Steps>
+  <Step title="Audio Detection">
+    System detects audio messages from WhatsApp webhook:
+    
+    ```php webhook.php
+    if ($messageData['type'] === 'audio' && isset($messageData['audio_id'])) {
+        if ($botMode === 'classic') {
+            // Audio not supported in classic mode
+            $whatsapp->sendMessage($messageData['from'], 
+                "Lo siento, en este modo solo puedo procesar mensajes de *texto*.");
+            exit;
+        }
+    ```
+  </Step>
+  
+  <Step title="Download & Storage">
+    Downloads audio file from WhatsApp and saves locally:
+    
+    ```php webhook.php
+    $audioContent = $whatsapp->downloadMedia($messageData['audio_id']);
+    
+    // Create organized folder structure
+    $contactName = preg_replace('/[^a-zA-Z0-9_-]/', '_', $messageData['contact_name']);
+    $phoneNumber = $messageData['from'];
+    $conversationFolder = $contactName . '_' . $phoneNumber;
+    
+    $audioDir = __DIR__ . '/uploads/audios/' . $conversationFolder;
+    if (!file_exists($audioDir)) {
+        mkdir($audioDir, 0755, true);
+    }
+    
+    $audioFileName = uniqid('audio_') . '_' . time() . '.ogg';
+    $audioPath = $audioDir . '/' . $audioFileName;
+    file_put_contents($audioPath, $audioContent);
+    
+    $messageData['audio_url'] = '/uploads/audios/' . $conversationFolder . '/' . $audioFileName;
+    ```
+  </Step>
+  
+  <Step title="Transcription">
+    Converts audio to text using Whisper:
+    
+    ```php src/Services/OpenAIService.php
+    public function transcribeAudio($audioContent, $filename = 'audio.ogg')
+    {
+        $tempFile = sys_get_temp_dir() . '/' . uniqid() . '_' . $filename;
+        file_put_contents($tempFile, $audioContent);
+
+        $response = $this->client->post('audio/transcriptions', [
+            'multipart' => [
+                [
+                    'name' => 'file',
+                    'contents' => fopen($tempFile, 'r'),
+                    'filename' => $filename
+                ],
+                [
+                    'name' => 'model',
+                    'contents' => 'whisper-1'
+                ],
+                [
+                    'name' => 'language',
+                    'contents' => 'es'  // Spanish
+                ]
+            ]
+        ]);
+
+        $data = json_decode($response->getBody()->getContents(), true);
+        unlink($tempFile);
+
+        $this->logger->info('Whisper: Audio transcribed', [
+            'text_length' => strlen($data['text'])
+        ]);
+        
+        return $data['text'];
+    }
+    ```
+  </Step>
+  
+  <Step title="Processing">
+    Transcribed text is processed like any text message:
+    
+    ```php webhook.php
+    $transcription = $openai->transcribeAudio($audioContent, 'audio.ogg');
+    $messageData['text'] = '[Audio] ' . $transcription;
+    
+    // Continue normal message processing
+    $result = $rag->generateResponse($messageData['text'], ...);
+    ```
+  </Step>
+</Steps>
+
+<Note>
+Audio files are organized by conversation: `uploads/audios/{ContactName}_{PhoneNumber}/audio_{uniqueid}_{timestamp}.ogg`
+</Note>
+
+## Tool Calling (Function Calling)
+
+AI mode uses OpenAI's function calling for calendar intent detection:
+
+### Calendar Tools Definition
+
+```php src/Services/OpenAIService.php
+public function getCalendarTools()
+{
+    return [
+        [
+            'type' => 'function',
+            'function' => [
+                'name' => 'schedule_appointment',
+                'description' => 'El usuario quiere agendar, reservar, programar o sacar una cita, turno, reunión, consulta o cualquier tipo de evento.',
+                'parameters' => [
+                    'type' => 'object',
+                    'properties' => [
+                        'date_preference' => [
+                            'type' => 'string',
+                            'description' => 'Fecha o referencia temporal mencionada'
+                        ],
+                        'time_preference' => [
+                            'type' => 'string',
+                            'description' => 'Hora o rango preferido'
+                        ],
+                        'service_type' => [
+                            'type' => 'string',
+                            'description' => 'Tipo de servicio o motivo'
+                        ],
+                        'is_confirmed' => [
+                            'type' => 'boolean',
+                            'description' => 'true si el usuario confirmó fecha y hora'
+                        ]
+                    ],
+                    'required' => ['is_confirmed']
+                ]
+            ]
+        ],
+        // Additional tools: check_availability, list_appointments, 
+        // reschedule_appointment, cancel_appointment
+    ];
+}
+```
+
+### Intent Detection
+
+```php src/Services/CalendarIntentService.php
+public function detectIntent(string $message, array $conversationHistory, string $systemPrompt): array
+{
+    $tools = $this->openai->getCalendarTools();
+
+    $response = $this->openai->generateResponseWithTools(
+        $message,
+        '',
+        $systemPrompt,
+        $tools,
+        0.7,
+        500,
+        $conversationHistory
+    );
+
+    return $this->parseResponse($response);
+}
+
+private function parseResponse(array $message): array
+{
+    if (isset($message['tool_calls']) && !empty($message['tool_calls'])) {
+        $toolCall = $message['tool_calls'][0];
+        $functionName = $toolCall['function']['name'];
+        $arguments = json_decode($toolCall['function']['arguments'], true);
+
+        $this->logger->info('CalendarIntentService: Tool invoked', [
+            'function' => $functionName,
+            'arguments' => $arguments
+        ]);
+
+        switch ($functionName) {
+            case 'schedule_appointment':
+                return [
+                    'intent' => 'schedule',
+                    'extracted_data' => [
+                        'date_preference' => $arguments['date_preference'] ?? '',
+                        'time_preference' => $arguments['time_preference'] ?? null,
+                        'service_type' => $arguments['service_type'] ?? null,
+                        'is_confirmed' => $arguments['is_confirmed'] ?? false
+                    ],
+                    'confidence' => 'high',
+                    'original_response' => $message['content'] ?? null
+                ];
+            // Handle other intents...
+        }
+    }
+
+    return [
+        'intent' => 'none',
+        'confidence' => 'low'
+    ];
+}
+```
+
+## Conversation History
+
+The system maintains conversation context for continuity:
+
+```php webhook.php
+// Get configured context window size
+$contextCountRow = $db->fetchOne(
+    "SELECT setting_value FROM settings WHERE setting_key = 'context_messages_count'",
+    []
+);
+$contextMessagesCount = isset($contextCountRow['setting_value']) 
+    ? intval($contextCountRow['setting_value']) 
+    : 5;
+
+// Retrieve recent messages
+$conversationHistory = [];
+if ($contextMessagesCount > 0) {
+    $historyMessages = $db->fetchAll(
+        "SELECT sender_type, message_text FROM messages 
+         WHERE conversation_id = :conversation_id 
+         ORDER BY created_at DESC 
+         LIMIT " . intval($contextMessagesCount),
+        [':conversation_id' => $conversation['id']]
+    );
+    
+    $conversationHistory = array_map(function($msg) {
+        return [
+            'sender' => $msg['sender_type'],
+            'message_text' => $msg['message_text']
+        ];
+    }, array_reverse($historyMessages));
+}
+```
+
+<Note>
+**Context window:** Configurable (default: 5 messages). Includes both user and bot messages for full context.
+</Note>
+
+## System Prompts
+
+Customize bot behavior with system prompts:
+
+```php webhook.php
+$systemPromptRow = $db->fetchOne(
+    "SELECT setting_value FROM settings WHERE setting_key = 'system_prompt'",
+    []
+);
+$systemPrompt = $systemPromptRow['setting_value'] 
+    ?? 'Eres un asistente virtual útil y amigable.';
+
+// Append calendar prompt if enabled
+if ($isCalendarEnabled && file_exists(__DIR__ . '/prompts/calendar_prompt.txt')) {
+    $calendarPrompt = file_get_contents(__DIR__ . '/prompts/calendar_prompt.txt');
+    $systemPrompt .= "\n\n" . $calendarPrompt;
+}
+```
+
+## Human Handoff
+
+Users can request human assistance with trigger keywords:
+
+```php webhook.php
+$humanKeywords = [
+    'hablar con humano', 'hablar con una persona', 'hablar con operador', 
+    'quiero un humano', 'atención humana', 'operador', 'agente humano',
+    'hablar con alguien', 'persona real', 'representante'
+];
+
+$messageLower = mb_strtolower($messageData['text']);
+$isRequestingHuman = false;
+
+foreach ($humanKeywords as $keyword) {
+    if (strpos($messageLower, $keyword) !== false) {
+        $isRequestingHuman = true;
+        break;
+    }
+}
+
+if ($isRequestingHuman) {
+    $humanMessage = 'Enseguida te comunico con alguien de nuestro equipo.';
+    $whatsapp->sendMessage($messageData['from'], $humanMessage);
+    
+    $conversationService->updateConversationStatus($conversation['id'], 'pending_human');
+    $db->query(
+        'UPDATE conversations SET ai_enabled = 0 WHERE id = :id',
+        [':id' => $conversation['id']]
+    );
+    
+    exit;
+}
+```
+
+## Error Handling
+
+The system gracefully handles API errors:
+
+```php src/Services/OpenAIService.php
+try {
+    $response = $this->client->post('chat/completions', ['json' => $requestBody]);
+    return json_decode($response->getBody()->getContents(), true);
+} catch (\GuzzleHttp\Exception\ClientException $e) {
+    $response = $e->getResponse();
+    $body = json_decode($response->getBody()->getContents(), true);
+    
+    if ($response->getStatusCode() === 429 || 
+        (isset($body['error']['code']) && $body['error']['code'] === 'insufficient_quota')) {
+        $this->logger->error('OpenAI Insufficient Funds');
+        throw new \RuntimeException('INSUFFICIENT_FUNDS');
+    }
+    
+    throw $e;
+}
+```
+
+<Warning>
+When OpenAI quota is exceeded, the system stores the error state in settings and disables AI responses until resolved.
+</Warning>
+
+## Configuration
+
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `bot_mode` | `ai` | Mode: `ai` or `classic` |
+| `system_prompt` | (default) | Custom instructions for AI |
+| `context_messages_count` | 5 | Conversation history size |
+| `openai.model` | `gpt-4o-mini` | GPT model to use |
+| `openai.temperature` | 0.7 | Response creativity (0-2) |
+| `openai.max_tokens` | 500 | Maximum response length |
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="RAG System" icon="database" href="/features/rag-system">
+    Learn about document retrieval and knowledge base
+  </Card>
+  <Card title="Calendar Integration" icon="calendar" href="/features/calendar-integration">
+    Explore appointment scheduling capabilities
+  </Card>
+</CardGroup>

@@ -1,0 +1,629 @@
+---
+title: Calendar Integration
+description: Google Calendar integration for appointment scheduling, availability checks, and event management
+icon: calendar
+---
+
+## Overview
+
+The calendar integration enables users to schedule, view, reschedule, and cancel appointments directly through WhatsApp. It connects to Google Calendar API and uses AI-powered intent detection to understand natural language requests.
+
+## Features
+
+<CardGroup cols={2}>
+  <Card title="Schedule Appointments" icon="calendar-plus">
+    Book appointments with date/time validation and conflict detection
+  </Card>
+  <Card title="Check Availability" icon="clock">
+    Query available time slots within business hours
+  </Card>
+  <Card title="List Appointments" icon="list">
+    View upcoming scheduled appointments
+  </Card>
+  <Card title="Reschedule & Cancel" icon="calendar-xmark">
+    Modify or cancel existing appointments
+  </Card>
+</CardGroup>
+
+## Google Calendar Service
+
+The system integrates with Google Calendar API v3:
+
+### Authentication
+
+```php src/Services/GoogleCalendarService.php
+public function __construct($accessToken, $calendarId, Logger $logger, 
+                            $timezone = 'America/Bogota', $refreshToken = null, 
+                            $clientId = null, $clientSecret = null, $db = null)
+{
+    $this->accessToken = $accessToken;
+    $this->refreshToken = $refreshToken;
+    $this->calendarId = $calendarId;
+    $this->timezone = $timezone;
+    $this->logger = $logger;
+    $this->db = $db;
+
+    $this->client = new Client([
+        'base_uri' => 'https://www.googleapis.com/calendar/v3/',
+        'headers' => [
+            'Authorization' => 'Bearer ' . $this->accessToken,
+            'Content-Type' => 'application/json',
+            'Accept' => 'application/json'
+        ]
+    ]);
+}
+```
+
+### Token Refresh
+
+Automatically refreshes expired access tokens:
+
+```php src/Services/GoogleCalendarService.php
+private function refreshAccessToken()
+{
+    if (!$this->refreshToken || !$this->clientId || !$this->clientSecret) {
+        throw new \Exception('Refresh token not configured');
+    }
+
+    $tokenClient = new Client(['verify' => false]);
+    $response = $tokenClient->post('https://oauth2.googleapis.com/token', [
+        'form_params' => [
+            'client_id' => $this->clientId,
+            'client_secret' => $this->clientSecret,
+            'refresh_token' => $this->refreshToken,
+            'grant_type' => 'refresh_token'
+        ]
+    ]);
+
+    $data = json_decode($response->getBody(), true);
+    
+    if (isset($data['access_token'])) {
+        $this->accessToken = $data['access_token'];
+        
+        // Update client with new token
+        $this->client = new Client([
+            'base_uri' => 'https://www.googleapis.com/calendar/v3/',
+            'headers' => [
+                'Authorization' => 'Bearer ' . $this->accessToken,
+                'Content-Type' => 'application/json'
+            ]
+        ]);
+        
+        $this->logger->info('Access token refreshed successfully');
+        
+        // Persist to encrypted credentials
+        if ($this->db) {
+            $credService = new CredentialService($this->db, new EncryptionService());
+            $credService->saveGoogleOAuthCredentials([
+                'access_token' => $this->accessToken
+            ]);
+        }
+        
+        return true;
+    }
+    
+    return false;
+}
+```
+
+## Intent Detection
+
+Uses OpenAI function calling to detect calendar intents:
+
+### Supported Intents
+
+<Tabs>
+  <Tab title="Schedule">
+    Detect appointment scheduling requests:
+    
+    ```php
+    'schedule_appointment' => [
+        'description' => 'El usuario quiere agendar, reservar, programar o sacar una cita, turno, reunión, consulta o cualquier tipo de evento.',
+        'parameters' => [
+            'date_preference' => 'Fecha o referencia temporal',
+            'time_preference' => 'Hora o rango preferido',
+            'service_type' => 'Tipo de servicio',
+            'is_confirmed' => 'true si confirmado'
+        ]
+    ]
+    ```
+    
+    **Example triggers:**
+    - "quiero una cita"
+    - "puedo ir el martes"
+    - "necesito un turno"
+    - "están disponibles el viernes"
+  </Tab>
+  
+  <Tab title="Check Availability">
+    Query available time slots:
+    
+    ```php
+    'check_availability' => [
+        'description' => 'El usuario pregunta por disponibilidad sin necesariamente querer agendar.',
+        'parameters' => [
+            'date_range' => 'Rango de fechas consultado'
+        ]
+    ]
+    ```
+    
+    **Example triggers:**
+    - "qué días tienen"
+    - "cuándo están libres"
+    - "tienen espacio esta semana"
+  </Tab>
+  
+  <Tab title="List Appointments">
+    View scheduled appointments:
+    
+    ```php
+    'list_appointments' => [
+        'description' => 'El usuario quiere consultar, ver o saber sus citas próximas.',
+        'parameters' => [] // No parameters required
+    ]
+    ```
+    
+    **Example triggers:**
+    - "quiero saber mis próximas citas"
+    - "tengo citas pendientes?"
+    - "cuándo es mi cita"
+    - "ver mi agenda"
+  </Tab>
+  
+  <Tab title="Reschedule">
+    Modify existing appointments:
+    
+    ```php
+    'reschedule_appointment' => [
+        'description' => 'El usuario quiere reagendar, mover, reprogramar o cambiar la fecha/hora.',
+        'parameters' => [
+            'reason' => 'Motivo del reagendamiento'
+        ]
+    ]
+    ```
+    
+    **Example triggers:**
+    - "quiero reagendar"
+    - "cambiar mi cita"
+    - "moverla para otro día"
+  </Tab>
+  
+  <Tab title="Cancel">
+    Cancel appointments:
+    
+    ```php
+    'cancel_appointment' => [
+        'description' => 'El usuario quiere cancelar o anular definitivamente una cita.',
+        'parameters' => [
+            'reason' => 'Motivo de cancelación'
+        ]
+    ]
+    ```
+    
+    **Example triggers:**
+    - "cancelar mi cita"
+    - "no puedo ir"
+    - "anular la cita"
+  </Tab>
+</Tabs>
+
+### Intent Processing
+
+```php webhook.php
+if ($isCalendarEnabled) {
+    $calendarService = getCalendarService($logger, $db, $credentialService, $calendarConfig);
+    
+    if ($calendarService) {
+        $intentService = new CalendarIntentService($openai, $logger);
+        $intent = $intentService->detectIntent(
+            $messageData['text'], 
+            $conversationHistory, 
+            $systemPrompt
+        );
+        
+        $logger->info('Calendar intent detection', [
+            'intent' => $intent['intent'],
+            'confidence' => $intent['confidence']
+        ]);
+        
+        if ($intent['intent'] !== 'none') {
+            $flowHandler = new CalendarFlowHandler(
+                $db, $logger, $calendarService, $openai, $calendarConfig, $conversationService
+            );
+            
+            $flowResult = $flowHandler->startFlow(
+                $intent['intent'], 
+                $intent['extracted_data'], 
+                $conversation, 
+                $messageData
+            );
+            
+            if ($flowResult['handled']) {
+                $whatsapp->sendMessage($messageData['from'], $flowResult['response']);
+                exit;
+            }
+        }
+    }
+}
+```
+
+## Scheduling Flow
+
+The appointment scheduling process:
+
+<Steps>
+  <Step title="Intent Detection">
+    System detects scheduling intent and extracts date/time preferences from user message.
+  </Step>
+  
+  <Step title="Date Validation">
+    Validates date format and ensures it's not in the past:
+    
+    ```php src/Services/GoogleCalendarService.php
+    public function validateDateNotPast($dateString)
+    {
+        $today = new \DateTime('now', new \DateTimeZone($this->timezone));
+        $today->setTime(0, 0, 0);
+        $requestedDate = new \DateTime($dateString, new \DateTimeZone($this->timezone));
+        $requestedDate->setTime(0, 0, 0);
+        
+        if ($requestedDate < $today) {
+            return [
+                'valid' => false,
+                'message' => 'Esa fecha ya pasó. Por favor indica una fecha futura válida.'
+            ];
+        }
+        
+        return ['valid' => true];
+    }
+    ```
+  </Step>
+  
+  <Step title="Business Hours Check">
+    Validates time is within configured business hours:
+    
+    ```php src/Services/GoogleCalendarService.php
+    public function validateBusinessHours($date, $time, $businessHours)
+    {
+        $datetime = new \DateTime($date . ' ' . $time, new \DateTimeZone($this->timezone));
+        $dayOfWeek = strtolower($datetime->format('l')); // monday, tuesday, etc.
+        
+        if (!isset($businessHours[$dayOfWeek]) || $businessHours[$dayOfWeek] === null) {
+            return [
+                'valid' => false,
+                'reason' => 'No atendemos ese día'
+            ];
+        }
+        
+        $hours = $businessHours[$dayOfWeek];
+        $startTime = $hours['start'];
+        $endTime = $hours['end'];
+        
+        $requestedTime = $datetime->format('H:i');
+        
+        if ($requestedTime < $startTime || $requestedTime >= $endTime) {
+            return [
+                'valid' => false,
+                'reason' => "Horario fuera de atención. Atendemos de {$startTime} a {$endTime}"
+            ];
+        }
+        
+        return ['valid' => true];
+    }
+    ```
+  </Step>
+  
+  <Step title="Minimum Advance Check">
+    Ensures appointment is scheduled with minimum notice:
+    
+    ```php src/Services/GoogleCalendarService.php
+    public function validateMinAdvanceHours($date, $time, $minAdvanceHours)
+    {
+        $requestedDateTime = new \DateTime("{$date} {$time}", new \DateTimeZone($this->timezone));
+        $now = new \DateTime('now', new \DateTimeZone($this->timezone));
+        $minDateTime = clone $now;
+        $minDateTime->modify("+{$minAdvanceHours} hours");
+        
+        if ($requestedDateTime < $minDateTime) {
+            return [
+                'valid' => false,
+                'message' => "Las citas requieren al menos {$minAdvanceHours} hora(s) de antelación."
+            ];
+        }
+        
+        return ['valid' => true];
+    }
+    ```
+  </Step>
+  
+  <Step title="Conflict Detection">
+    Checks for existing appointments in the requested time slot:
+    
+    ```php src/Services/GoogleCalendarService.php
+    public function checkEventOverlap($date, $startTime, $endTime)
+    {
+        $timeMin = (new \DateTime("{$date} {$startTime}", new \DateTimeZone($this->timezone)))
+            ->format(\DateTime::RFC3339);
+        $timeMax = (new \DateTime("{$date} {$endTime}", new \DateTimeZone($this->timezone)))
+            ->format(\DateTime::RFC3339);
+        
+        $data = $this->makeRequest('get', "calendars/{$this->calendarId}/events", [
+            'query' => [
+                'timeMin' => $timeMin,
+                'timeMax' => $timeMax,
+                'singleEvents' => 'true',
+                'orderBy' => 'startTime'
+            ]
+        ]);
+        
+        if (!empty($data['items'])) {
+            return [
+                'overlap' => true,
+                'events' => $data['items']
+            ];
+        }
+        
+        return ['overlap' => false, 'events' => []];
+    }
+    ```
+  </Step>
+  
+  <Step title="Event Creation">
+    Creates the appointment in Google Calendar:
+    
+    ```php src/Services/GoogleCalendarService.php
+    public function createEvent($summary, $description, $startDateTime, $endDateTime, 
+                                $attendeeEmail = null, $calendarConfig = null)
+    {
+        $reminders = $this->buildReminders($calendarConfig);
+        
+        $event = [
+            'summary' => $summary,
+            'description' => $description,
+            'start' => [
+                'dateTime' => $startDateTime,
+                'timeZone' => $this->timezone
+            ],
+            'end' => [
+                'dateTime' => $endDateTime,
+                'timeZone' => $this->timezone
+            ],
+            'reminders' => $reminders
+        ];
+
+        if ($attendeeEmail) {
+            $event['attendees'] = [
+                ['email' => $attendeeEmail]
+            ];
+        }
+
+        return $this->makeRequest('post', "calendars/{$this->calendarId}/events", [
+            'json' => $event
+        ]);
+    }
+    ```
+  </Step>
+</Steps>
+
+## Date Parsing
+
+The system supports multiple date formats:
+
+```php src/Services/GoogleCalendarService.php
+public function validateDateFormat($dateText)
+{
+    // Numeric formats: 15/03/2026, 15-03-2026
+    if (preg_match('/(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})/', $dateText, $matches)) {
+        $day = intval($matches[1]);
+        $month = intval($matches[2]);
+        $year = intval($matches[3]);
+        
+        if (checkdate($month, $day, $year)) {
+            return sprintf('%04d-%02d-%02d', $year, $month, $day);
+        }
+    }
+    
+    // Spanish month names: "15 de marzo de 2026", "15 de marzo"
+    $months = [
+        'enero' => 1, 'febrero' => 2, 'marzo' => 3, 'abril' => 4,
+        'mayo' => 5, 'junio' => 6, 'julio' => 7, 'agosto' => 8,
+        'septiembre' => 9, 'octubre' => 10, 'noviembre' => 11, 'diciembre' => 12
+    ];
+    
+    foreach ($months as $monthName => $monthNum) {
+        if (preg_match('/(\d{1,2})\s+de\s+' . $monthName . '\s+(?:del?\s+)?(\d{4})/i', $dateText, $matches)) {
+            return sprintf('%04d-%02d-%02d', $matches[2], $monthNum, $matches[1]);
+        }
+        if (preg_match('/(\d{1,2})\s+de\s+' . $monthName . '/i', $dateText, $matches)) {
+            $year = (new \DateTime('now', new \DateTimeZone($this->timezone)))->format('Y');
+            $candidate = new \DateTime("{$year}-{$monthNum}-{$matches[1]}", 
+                                       new \DateTimeZone($this->timezone));
+            if ($candidate < new \DateTime('now', new \DateTimeZone($this->timezone))) {
+                $candidate->modify('+1 year');
+            }
+            return $candidate->format('Y-m-d');
+        }
+    }
+    
+    // Relative dates
+    $textLower = mb_strtolower($dateText);
+    $tz = new \DateTimeZone($this->timezone);
+    
+    if (strpos($textLower, 'pasado mañana') !== false) {
+        return (new \DateTime('+2 days', $tz))->format('Y-m-d');
+    }
+    if (strpos($textLower, 'mañana') !== false) {
+        return (new \DateTime('+1 day', $tz))->format('Y-m-d');
+    }
+    if (strpos($textLower, 'hoy') !== false) {
+        return (new \DateTime('now', $tz))->format('Y-m-d');
+    }
+    
+    return null;
+}
+```
+
+<Note>
+**Supported date formats:**
+- Numeric: `15/03/2026`, `15-03-2026`
+- Spanish: `15 de marzo`, `15 de marzo de 2026`
+- Relative: `hoy`, `mañana`, `pasado mañana`
+</Note>
+
+## Event Management
+
+### List Appointments
+
+```php src/Services/GoogleCalendarService.php
+public function getUpcomingEvents(string $timeMin, string $timeMax, int $maxResults = 10): array
+{
+    $data = $this->makeRequest('get', "calendars/{$this->calendarId}/events", [
+        'query' => [
+            'timeMin'      => $timeMin,
+            'timeMax'      => $timeMax,
+            'maxResults'   => $maxResults,
+            'singleEvents' => 'true',
+            'orderBy'      => 'startTime'
+        ]
+    ]);
+    return $data['items'] ?? [];
+}
+```
+
+### Reschedule Appointment
+
+```php src/Services/GoogleCalendarService.php
+public function rescheduleEvent(string $eventId, string $newStart, string $newEnd): array
+{
+    $result = $this->makeRequest('patch', "calendars/{$this->calendarId}/events/{$eventId}", [
+        'json' => [
+            'start' => ['dateTime' => $newStart, 'timeZone' => $this->timezone],
+            'end'   => ['dateTime' => $newEnd,   'timeZone' => $this->timezone],
+        ]
+    ]);
+    
+    $this->logger->info('Event rescheduled successfully', ['event_id' => $eventId]);
+    return $result;
+}
+```
+
+### Cancel Appointment
+
+```php src/Services/GoogleCalendarService.php
+public function deleteEvent(string $eventId): bool
+{
+    $this->makeRequest('delete', "calendars/{$this->calendarId}/events/{$eventId}");
+    $this->logger->info('Event deleted successfully', ['event_id' => $eventId]);
+    return true;
+}
+```
+
+## Reminders
+
+Configure email and popup reminders:
+
+```php src/Services/GoogleCalendarService.php
+private function buildReminders($calendarConfig = null)
+{
+    $overrides = [];
+    
+    if ($calendarConfig && isset($calendarConfig['reminders'])) {
+        $rem = $calendarConfig['reminders'];
+        if (!empty($rem['email']['enabled'])) {
+            $overrides[] = [
+                'method' => 'email', 
+                'minutes' => (int)($rem['email']['minutes_before'] ?? 1440)
+            ];
+        }
+        if (!empty($rem['popup']['enabled'])) {
+            $overrides[] = [
+                'method' => 'popup', 
+                'minutes' => (int)($rem['popup']['minutes_before'] ?? 30)
+            ];
+        }
+    }
+    
+    if (empty($overrides)) {
+        return ['useDefault' => true];
+    }
+    
+    return [
+        'useDefault' => false,
+        'overrides' => $overrides
+    ];
+}
+```
+
+## Configuration
+
+Calendar settings are stored in the database:
+
+```php
+[
+    'enabled' => true,
+    'timezone' => 'America/Bogota',
+    'business_hours' => [
+        'monday' => ['start' => '08:00', 'end' => '18:00'],
+        'tuesday' => ['start' => '08:00', 'end' => '18:00'],
+        'wednesday' => ['start' => '08:00', 'end' => '18:00'],
+        'thursday' => ['start' => '08:00', 'end' => '18:00'],
+        'friday' => ['start' => '08:00', 'end' => '18:00'],
+        'saturday' => ['start' => '08:00', 'end' => '13:00'],
+        'sunday' => null // Closed
+    ],
+    'appointment_duration_minutes' => 60,
+    'min_advance_hours' => 2,
+    'reminders' => [
+        'email' => [
+            'enabled' => true,
+            'minutes_before' => 1440 // 24 hours
+        ],
+        'popup' => [
+            'enabled' => true,
+            'minutes_before' => 30
+        ]
+    ]
+]
+```
+
+## WhatsApp Formatting
+
+Format events for WhatsApp display:
+
+```php src/Services/GoogleCalendarService.php
+public function formatEventsForWhatsApp($events)
+{
+    if (empty($events)) {
+        return "No hay eventos próximos agendados.";
+    }
+
+    $message = "*Próximos eventos:*\n\n";
+    
+    foreach ($events as $index => $event) {
+        $start = new \DateTime($event['start']['dateTime'] ?? $event['start']['date']);
+        $summary = $event['summary'] ?? 'Sin título';
+        
+        $message .= ($index + 1) . ". *" . $summary . "*\n";
+        $message .= "   " . $start->format('d/m/Y H:i') . "\n";
+        
+        if (isset($event['description'])) {
+            $message .= "   " . substr($event['description'], 0, 50) . "...\n";
+        }
+        
+        $message .= "\n";
+    }
+
+    return $message;
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Setup Calendar" icon="gear" href="/configuration/google-calendar">
+    Configure Google Calendar OAuth and credentials
+  </Card>
+  <Card title="Flow Builder" icon="diagram-project" href="/features/flow-builder">
+    Create custom conversation flows
+  </Card>
+</CardGroup>

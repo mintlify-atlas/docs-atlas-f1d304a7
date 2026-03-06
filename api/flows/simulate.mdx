@@ -1,0 +1,315 @@
+---
+title: "Simulate Flow"
+api: "POST /api/simulate-flow.php"
+description: "Test conversation flows in a simulated environment"
+---
+
+## Overview
+
+Simulates a conversation through the flow-based bot without sending actual WhatsApp messages. This endpoint maintains session state for testing multi-step conversations.
+
+<Info>
+  Each simulation session is identified by your PHP session ID. Multiple browser tabs will share the same simulation session.
+</Info>
+
+## Request
+
+<ParamField body="message" type="string" required>
+  User message to process through the flow
+</ParamField>
+
+<ParamField body="reset" type="boolean">
+  Set to `true` to clear the simulation session and start over
+</ParamField>
+
+<CodeGroup>
+```bash Send Message
+curl -X POST https://your-domain.com/api/simulate-flow.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "Hello"
+  }'
+```
+
+```bash Reset Session
+curl -X POST https://your-domain.com/api/simulate-flow.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "reset": true
+  }'
+```
+
+```javascript JavaScript
+// Start conversation
+const response = await fetch('/api/simulate-flow.php', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ message: 'Hello' })
+});
+const data = await response.json();
+console.log(data.response);
+
+// Continue conversation
+const response2 = await fetch('/api/simulate-flow.php', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ message: '1' }) // User selects option 1
+});
+
+// Reset and start over
+await fetch('/api/simulate-flow.php', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ reset: true })
+});
+```
+</CodeGroup>
+
+## Response
+
+### Message Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the simulation was successful
+</ResponseField>
+
+<ResponseField name="type" type="string" required>
+  Type of response:
+  - `"message"` - Bot sent a text message
+  - `"menu"` - Bot presented a menu with options
+  - `"question"` - Bot asked a question
+  - `"end"` - Conversation ended
+  - `"error"` - Invalid input or flow error
+</ResponseField>
+
+<ResponseField name="response" type="string" required>
+  Bot's response text
+</ResponseField>
+
+### Reset Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if reset was successful
+</ResponseField>
+
+<ResponseField name="reset" type="boolean" required>
+  Confirms session was reset (always `true`)
+</ResponseField>
+
+## Examples
+
+### Complete Conversation Simulation
+
+<CodeGroup>
+```json Request 1: Start
+{
+  "message": "Hi"
+}
+```
+
+```json Response 1: Welcome
+{
+  "success": true,
+  "type": "message",
+  "response": "¡Bienvenido! ¿En qué puedo ayudarte?"
+}
+```
+
+```json Request 2: Continue
+{
+  "message": "continue"
+}
+```
+
+```json Response 2: Menu
+{
+  "success": true,
+  "type": "menu",
+  "response": "Por favor elige una opción:\n1. Agendar cita\n2. Consultar información\n3. Hablar con un operador"
+}
+```
+
+```json Request 3: Select Option
+{
+  "message": "1"
+}
+```
+
+```json Response 3: Question
+{
+  "success": true,
+  "type": "question",
+  "response": "¿Cuál es tu nombre completo?"
+}
+```
+
+```json Request 4: Answer
+{
+  "message": "Juan Pérez"
+}
+```
+
+```json Response 4: Confirmation
+{
+  "success": true,
+  "type": "message",
+  "response": "Gracias, Juan Pérez. Tu información ha sido registrada."
+}
+```
+</CodeGroup>
+
+### Reset Example
+
+```json Request
+{
+  "reset": true
+}
+```
+
+```json Response
+{
+  "success": true,
+  "reset": true
+}
+```
+
+### Error Example
+
+```json Request (missing field)
+{
+  "message": ""
+}
+```
+
+```json Response
+{
+  "success": false,
+  "error": "Campo \"message\" requerido"
+}
+```
+
+## Error Handling
+
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Simulation processed successfully |
+| 400 | Missing or invalid message field |
+| 405 | Method not allowed (only POST accepted) |
+| 500 | Internal server error |
+
+## Session Management
+
+The simulation uses a synthetic phone number format for tracking:
+
+```
+SIM_{md5_of_session_id}
+```
+
+Session data is stored in the `classic_flow_sessions` table:
+- Current node position in flow
+- User responses
+- Conversation context
+
+### Session Lifecycle
+
+1. **First message**: Creates new simulation session at root node
+2. **Subsequent messages**: Continues from current position
+3. **Reset**: Deletes session data, next message starts fresh
+4. **Browser restart**: New PHP session = new simulation session
+
+## Implementation Details
+
+The endpoint:
+1. Validates request method is POST
+2. Checks for required `message` field (unless resetting)
+3. Generates simulation phone number from session ID
+4. Handles reset by deleting session data
+5. Calls `ClassicBotService->processMessage()` for normal messages
+6. Maintains session state between requests
+7. Returns bot response with type classification
+
+Source: `api/simulate-flow.php:11-46`
+
+## Use Cases
+
+### Flow Testing UI
+
+```javascript
+class FlowSimulator {
+  async send(message) {
+    const response = await fetch('/api/simulate-flow.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message })
+    });
+    return response.json();
+  }
+  
+  async reset() {
+    await fetch('/api/simulate-flow.php', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reset: true })
+    });
+  }
+}
+
+// Usage
+const sim = new FlowSimulator();
+const response1 = await sim.send('Hello');
+console.log(response1.response);
+
+await sim.reset();
+const response2 = await sim.send('Hello'); // Starts over
+```
+
+### Automated Flow Testing
+
+```javascript
+async function testFlow(steps) {
+  const sim = new FlowSimulator();
+  await sim.reset();
+  
+  const results = [];
+  for (const step of steps) {
+    const response = await sim.send(step.input);
+    results.push({
+      input: step.input,
+      expected: step.expected,
+      actual: response.response,
+      passed: response.response.includes(step.expected)
+    });
+  }
+  
+  return results;
+}
+
+// Test case
+const testResults = await testFlow([
+  { input: 'Hi', expected: 'Bienvenido' },
+  { input: 'continue', expected: 'elige una opción' },
+  { input: '1', expected: 'nombre completo' }
+]);
+```
+
+## Best Practices
+
+<Check>
+  **Reset between tests**: Always reset before starting a new test scenario
+</Check>
+
+<Check>
+  **Test all paths**: Simulate every possible conversation path
+</Check>
+
+<Check>
+  **Validate responses**: Check response type and content match expectations
+</Check>
+
+<Check>
+  **Test edge cases**: Try invalid inputs, empty messages, unexpected options
+</Check>
+
+<Info>
+  Simulation sessions are isolated from production WhatsApp conversations. You can test freely without affecting real users.
+</Info>

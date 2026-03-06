@@ -1,0 +1,292 @@
+---
+title: 'Toggle AI'
+api: 'POST /api/conversations/{id}/toggle-ai'
+description: 'Enable or disable AI responses for a specific conversation'
+---
+
+## Endpoint
+
+```
+POST /api/conversations/{id}/toggle-ai
+```
+
+Enables or disables AI-powered automatic responses for a specific conversation. When AI is disabled, incoming messages will not receive automatic AI responses and will require human intervention.
+
+## Path Parameters
+
+<ParamField path="id" type="integer" required>
+  The unique identifier of the conversation
+</ParamField>
+
+## Request Body
+
+<ParamField body="ai_enabled" type="boolean" required>
+  Set to `true` to enable AI responses, or `false` to disable them
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the AI state was updated successfully
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Success message when the state is updated (only present when `success` is true)
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error code or message if the request failed (only present when `success` is false)
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL (Enable AI)
+curl -X POST 'https://your-domain.com/api/conversations/1/toggle-ai' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "ai_enabled": true
+  }'
+```
+
+```bash cURL (Disable AI)
+curl -X POST 'https://your-domain.com/api/conversations/1/toggle-ai' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "ai_enabled": false
+  }'
+```
+
+```javascript JavaScript
+const conversationId = 1;
+const aiEnabled = true;
+
+const response = await fetch(`/api/conversations/${conversationId}/toggle-ai`, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({ ai_enabled: aiEnabled })
+});
+
+const data = await response.json();
+
+if (data.success) {
+  console.log('AI state updated successfully');
+} else {
+  console.error('Failed to update AI state:', data.error);
+}
+```
+
+```javascript JavaScript (Toggle Function)
+async function toggleAI(conversationId, enable) {
+  try {
+    const response = await fetch(`/api/conversations/${conversationId}/toggle-ai`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ai_enabled: enable })
+    });
+    
+    const data = await response.json();
+    
+    if (!data.success) {
+      if (data.error === 'INSUFFICIENT_FUNDS') {
+        throw new Error('Cannot enable AI: Insufficient OpenAI funds');
+      }
+      throw new Error(data.message || data.error);
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Error toggling AI:', error);
+    throw error;
+  }
+}
+
+// Usage
+await toggleAI(1, true);  // Enable AI
+await toggleAI(1, false); // Disable AI
+```
+
+```php PHP
+$conversationId = 1;
+$aiEnabled = true;
+
+$data = json_encode([
+    'ai_enabled' => $aiEnabled
+]);
+
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, "https://your-domain.com/api/conversations/{$conversationId}/toggle-ai");
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+$response = curl_exec($ch);
+$result = json_decode($response, true);
+
+if ($result['success']) {
+    echo "AI state updated successfully\n";
+} else {
+    if ($result['error'] === 'INSUFFICIENT_FUNDS') {
+        echo "Cannot enable AI: Insufficient OpenAI funds\n";
+    } else {
+        echo "Error: " . $result['error'] . "\n";
+    }
+}
+
+curl_close($ch);
+```
+
+</CodeGroup>
+
+## Response Examples
+
+### Success Response
+
+```json
+{
+  "success": true,
+  "message": "AI state updated successfully"
+}
+```
+
+### Error Response (Missing Parameters)
+
+```json
+{
+  "success": false,
+  "error": "Error al cambiar estado de IA"
+}
+```
+
+### Error Response (Insufficient Funds)
+
+```json
+{
+  "success": false,
+  "error": "INSUFFICIENT_FUNDS",
+  "message": "No se puede activar la IA. Fondos insuficientes en OpenAI."
+}
+```
+
+## Implementation Details
+
+The endpoint is implemented in `api/toggle-ai.php` and performs the following operations:
+
+1. Validates that conversation ID and `ai_enabled` state are provided
+2. If enabling AI, checks OpenAI funding status
+3. Returns 402 (Payment Required) if OpenAI has insufficient funds
+4. Updates the `ai_enabled` field in the conversations table
+5. Returns success confirmation
+
+Route pattern (from `index.php:178`):
+```php
+if ($requestMethod === 'POST' && 
+    preg_match('#^/api/conversations/(\d+)/toggle-ai$#', $path, $matches)) {
+    $_GET['id'] = $matches[1];
+    require __DIR__ . '/api/toggle-ai.php';
+}
+```
+
+Key code sections:
+
+**Validation** (`toggle-ai.php:9-15`):
+```php
+$id = $_GET['id'] ?? null;
+$input = json_decode(file_get_contents('php://input'), true);
+$aiEnabled = $input['ai_enabled'] ?? null;
+
+if (!$id || $aiEnabled === null) {
+    throw new \InvalidArgumentException('Conversation ID and ai_enabled state required');
+}
+```
+
+**OpenAI Funds Check** (`toggle-ai.php:17-33`):
+```php
+if ($aiEnabled) {
+    $openaiStatus = $db->fetchOne(
+        "SELECT setting_value FROM settings WHERE setting_key = 'openai_status'",
+        []
+    );
+    
+    if ($openaiStatus && $openaiStatus['setting_value'] === 'insufficient_funds') {
+        http_response_code(402);
+        echo json_encode([
+            'success' => false,
+            'error' => 'INSUFFICIENT_FUNDS',
+            'message' => 'No se puede activar la IA. Fondos insuficientes en OpenAI.'
+        ]);
+        exit;
+    }
+}
+```
+
+**Database Update** (`toggle-ai.php:35-41`):
+```php
+$db->query(
+    'UPDATE conversations SET ai_enabled = :ai_enabled WHERE id = :id',
+    [
+        ':ai_enabled' => $aiEnabled ? 1 : 0,
+        ':id' => $id
+    ]
+);
+```
+
+## Insufficient Funds Check
+
+When attempting to enable AI (`ai_enabled: true`), the endpoint checks if OpenAI has sufficient funds by querying the `settings` table for the `openai_status` key.
+
+If the status is `insufficient_funds`, the request returns:
+- **HTTP Status**: 402 (Payment Required)
+- **Error Code**: `INSUFFICIENT_FUNDS`
+- **Message**: Descriptive error message
+
+This prevents enabling AI when the OpenAI API cannot process requests due to billing issues.
+
+## HTTP Status Codes
+
+- **200 OK**: AI state updated successfully
+- **402 Payment Required**: Cannot enable AI due to insufficient OpenAI funds
+- **500 Internal Server Error**: Other errors (missing parameters, database errors, etc.)
+
+## Use Cases
+
+### Disable AI for Complex Issues
+
+When a customer issue requires human expertise:
+
+```javascript
+await toggleAI(conversationId, false);
+```
+
+### Re-enable AI After Resolution
+
+Once a human agent resolves the issue:
+
+```javascript
+await toggleAI(conversationId, true);
+```
+
+### Batch Operations
+
+Disable AI for multiple conversations:
+
+```javascript
+const conversationIds = [1, 2, 3, 4, 5];
+
+for (const id of conversationIds) {
+  await toggleAI(id, false);
+}
+```
+
+## Notes
+
+- Disabling AI does NOT affect existing messages or conversation history
+- When AI is disabled, incoming messages will still be stored but won't trigger automatic responses
+- The conversation status is NOT changed by this endpoint
+- The `ai_enabled` field is stored as an integer (0 or 1) in the database
+- The insufficient funds check is only performed when enabling AI, not when disabling it
+- Changes take effect immediately for new incoming messages

@@ -1,0 +1,456 @@
+---
+title: 'Document Service'
+description: 'Handles document uploads, text extraction, and knowledge base management'
+icon: 'file-arrow-up'
+---
+
+## Overview
+
+The `DocumentService` manages the knowledge base by handling document uploads, extracting text content, preventing duplicates, and maintaining document metadata. It supports multiple file formats and integrates with the RAG system.
+
+## Class Structure
+
+**Namespace:** `App\Services`
+
+**Dependencies:**
+- `Database` - Database connection for document metadata
+- `TextProcessor` - Utility for extracting text from various file formats
+
+### Constructor
+
+```php
+public function __construct(
+    Database $db,
+    string $uploadPath,
+    array $allowedTypes,
+    int $maxSize
+)
+```
+
+<ParamField path="db" type="Database" required>
+  Database instance for document persistence
+</ParamField>
+
+<ParamField path="uploadPath" type="string" required>
+  Directory path for storing uploaded files
+</ParamField>
+
+<ParamField path="allowedTypes" type="array" required>
+  Array of allowed file extensions (e.g., `['pdf', 'txt', 'docx']`)
+</ParamField>
+
+<ParamField path="maxSize" type="int" required>
+  Maximum file size in bytes
+</ParamField>
+
+**Behavior:**
+- Automatically creates upload directory if it doesn't exist
+- Sets up file validation rules
+
+<CodeGroup>
+```php config.php
+$documentService = new DocumentService(
+    $db,
+    __DIR__ . '/../uploads/documents',
+    ['pdf', 'txt', 'docx', 'doc', 'md'],
+    10 * 1024 * 1024  // 10 MB
+);
+```
+</CodeGroup>
+
+---
+
+## Public Methods
+
+### uploadDocument
+
+Uploads and processes a document file, extracting its text content.
+
+```php
+public function uploadDocument(array $file): array
+```
+
+<ParamField path="file" type="array" required>
+  PHP `$_FILES` array entry containing:
+  - `name` - Original filename
+  - `tmp_name` - Temporary file path
+  - `size` - File size in bytes
+  - `error` - Upload error code
+</ParamField>
+
+**Returns:** Array with document metadata:
+
+```php
+[
+    'id' => 42,
+    'filename' => 'abc123_1234567890.pdf',
+    'original_name' => 'manual.pdf',
+    'file_type' => 'pdf',
+    'file_size' => 524288,
+    'text' => 'Extracted text content...'
+]
+```
+
+**Throws:**
+- `\RuntimeException` if upload fails, file type not allowed, size exceeded, or duplicate detected
+
+<CodeGroup>
+```php upload.php
+$documentService = new DocumentService(
+    $db,
+    __DIR__ . '/uploads/documents',
+    ['pdf', 'txt', 'docx', 'doc', 'md'],
+    10 * 1024 * 1024
+);
+
+try {
+    $result = $documentService->uploadDocument($_FILES['document']);
+    
+    echo "Document uploaded successfully!\n";
+    echo "ID: {$result['id']}\n";
+    echo "Original name: {$result['original_name']}\n";
+    echo "Text extracted: " . strlen($result['text']) . " chars\n";
+    
+    // Now chunk and embed the document
+    $chunks = $vectorService->chunkText($result['text'], 500);
+    foreach ($chunks as $chunk) {
+        $vectorService->addChunk($result['id'], $chunk);
+    }
+    
+    $documentService->updateChunkCount($result['id'], count($chunks));
+    
+} catch (\RuntimeException $e) {
+    echo "Upload failed: " . $e->getMessage();
+}
+```
+</CodeGroup>
+
+**Features:**
+- **Duplicate Detection:** Uses MD5 file hash to prevent duplicate uploads
+- **Text Extraction:** Automatically extracts text using `TextProcessor`
+- **Atomic Operations:** Cleans up file on error
+- **Unique Filenames:** Generates unique names using `uniqid() + timestamp`
+
+<Note>
+The service stores both the original filename (for display) and a unique system filename (for storage).
+</Note>
+
+---
+
+### getDocument
+
+Retrieves a document's metadata by ID.
+
+```php
+public function getDocument(int $id): ?array
+```
+
+<ParamField path="id" type="int" required>
+  Document ID
+</ParamField>
+
+**Returns:** Document record or `null` if not found
+
+```php
+$document = $documentService->getDocument(42);
+
+if ($document) {
+    echo "Name: {$document['original_name']}\n";
+    echo "Type: {$document['file_type']}\n";
+    echo "Size: {$document['file_size']} bytes\n";
+    echo "Chunks: {$document['chunk_count']}\n";
+    echo "Uploaded: {$document['created_at']}\n";
+}
+```
+
+---
+
+### getAllDocuments
+
+Retrieves all documents, ordered by creation date (newest first).
+
+```php
+public function getAllDocuments(int $limit = 100): array
+```
+
+<ParamField path="limit" type="int" default="100">
+  Maximum number of documents to retrieve
+</ParamField>
+
+**Returns:** Array of document records
+
+<CodeGroup>
+```php documents.php View
+$documents = $documentService->getAllDocuments(50);
+
+foreach ($documents as $doc) {
+    echo "<tr>";
+    echo "<td>{$doc['id']}</td>";
+    echo "<td>{$doc['original_name']}</td>";
+    echo "<td>{$doc['file_type']}</td>";
+    echo "<td>" . number_format($doc['file_size'] / 1024, 2) . " KB</td>";
+    echo "<td>{$doc['chunk_count']}</td>";
+    echo "<td>{$doc['created_at']}</td>";
+    echo "</tr>";
+}
+```
+</CodeGroup>
+
+---
+
+### deleteDocument
+
+Deletes a document and its physical file.
+
+```php
+public function deleteDocument(int $id): bool
+```
+
+<ParamField path="id" type="int" required>
+  Document ID to delete
+</ParamField>
+
+**Returns:** Boolean indicating success
+
+**Throws:** `\RuntimeException` if document not found
+
+**Behavior:**
+- Removes physical file from disk
+- Deletes database record
+- Handles missing files gracefully
+
+<Warning>
+**Cascade deletion required:** This method only deletes the document record. You must manually delete associated chunks from the vector database.
+</Warning>
+
+<CodeGroup>
+```php delete-document.php
+$documentId = $_POST['document_id'];
+
+try {
+    // 1. Delete vector embeddings first
+    $vectorService->deleteDocumentChunks($documentId);
+    
+    // 2. Delete document and file
+    $documentService->deleteDocument($documentId);
+    
+    echo json_encode(['success' => true]);
+    
+} catch (\RuntimeException $e) {
+    echo json_encode([
+        'success' => false,
+        'error' => $e->getMessage()
+    ]);
+}
+```
+</CodeGroup>
+
+---
+
+### updateChunkCount
+
+Updates the number of chunks created from this document.
+
+```php
+public function updateChunkCount(int $documentId, int $count): bool
+```
+
+<ParamField path="documentId" type="int" required>
+  Document ID
+</ParamField>
+
+<ParamField path="count" type="int" required>
+  Number of text chunks created
+</ParamField>
+
+**Returns:** Boolean indicating success
+
+```php
+// After chunking and embedding a document
+$chunks = $vectorService->chunkText($document['text'], 500);
+
+foreach ($chunks as $chunk) {
+    $vectorService->addChunk($documentId, $chunk);
+}
+
+// Update the document's chunk count
+$documentService->updateChunkCount($documentId, count($chunks));
+```
+
+---
+
+### getDocumentStats
+
+Retrieves aggregate statistics about all documents.
+
+```php
+public function getDocumentStats(): array
+```
+
+**Returns:** Array with statistics:
+
+```php
+$stats = $documentService->getDocumentStats();
+
+// Returns:
+// [
+//   'total' => 47,
+//   'total_size' => 15728640,  // bytes
+//   'by_type' => [
+//     'pdf' => 23,
+//     'txt' => 12,
+//     'docx' => 8,
+//     'md' => 4
+//   ]
+// ]
+
+echo "Total documents: {$stats['total']}\n";
+echo "Total size: " . number_format($stats['total_size'] / 1024 / 1024, 2) . " MB\n";
+echo "PDFs: {$stats['by_type']['pdf']}\n";
+```
+
+---
+
+## Database Schema
+
+### documents Table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INT | Primary key |
+| `filename` | VARCHAR | System filename (unique) |
+| `original_name` | VARCHAR | User's original filename |
+| `file_type` | VARCHAR | File extension |
+| `content_text` | LONGTEXT | Extracted text content |
+| `file_size` | INT | File size in bytes |
+| `file_hash` | VARCHAR(32) | MD5 hash for duplicate detection |
+| `chunk_count` | INT | Number of vector chunks |
+| `created_at` | TIMESTAMP | Upload time |
+
+---
+
+## Supported File Types
+
+The `TextProcessor` utility supports:
+
+- **PDF** (`.pdf`) - Extracted using pdftotext or similar
+- **Text** (`.txt`) - Raw text files
+- **Markdown** (`.md`) - Markdown files
+- **Word** (`.docx`, `.doc`) - Microsoft Word documents
+- **Rich Text** (`.rtf`) - Rich Text Format
+
+<Note>
+File type support depends on your `TextProcessor` implementation. Check `src/Utils/TextProcessor.php` for available extractors.
+</Note>
+
+---
+
+## Complete Upload Workflow
+
+<CodeGroup>
+```php upload-handler.php
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_FILES['document'])) {
+    $documentService = new DocumentService(
+        $db,
+        __DIR__ . '/uploads/documents',
+        ['pdf', 'txt', 'docx', 'doc', 'md'],
+        10 * 1024 * 1024
+    );
+    
+    try {
+        // 1. Upload and extract text
+        $document = $documentService->uploadDocument($_FILES['document']);
+        
+        // 2. Chunk the text
+        $vectorService = new VectorSearchService($db, $openai);
+        $chunks = $vectorService->chunkText($document['text'], 500);
+        
+        // 3. Generate and store embeddings
+        foreach ($chunks as $index => $chunk) {
+            $vectorService->addChunk(
+                $document['id'],
+                $chunk,
+                $index
+            );
+        }
+        
+        // 4. Update chunk count
+        $documentService->updateChunkCount($document['id'], count($chunks));
+        
+        echo json_encode([
+            'success' => true,
+            'document_id' => $document['id'],
+            'chunks_created' => count($chunks)
+        ]);
+        
+    } catch (\RuntimeException $e) {
+        http_response_code(400);
+        echo json_encode([
+            'success' => false,
+            'error' => $e->getMessage()
+        ]);
+    }
+}
+```
+</CodeGroup>
+
+---
+
+## Error Handling
+
+### Common Exceptions
+
+<CodeGroup>
+```php Upload Errors
+try {
+    $result = $documentService->uploadDocument($_FILES['document']);
+} catch (\RuntimeException $e) {
+    $message = $e->getMessage();
+    
+    if (strpos($message, 'File size exceeds') !== false) {
+        // File too large
+        echo "Please upload a smaller file (max 10MB)";
+    } 
+    elseif (strpos($message, 'File type not allowed') !== false) {
+        // Invalid file type
+        echo "Please upload PDF, DOCX, or TXT files only";
+    }
+    elseif (strpos($message, 'Documento duplicado') !== false) {
+        // Duplicate file
+        echo "This document has already been uploaded";
+    }
+    else {
+        // Other error
+        echo "Upload failed: {$message}";
+    }
+}
+```
+</CodeGroup>
+
+---
+
+## Best Practices
+
+<Tip>
+**Chunk immediately after upload** to make the document searchable. Store the chunk count for monitoring.
+</Tip>
+
+<Warning>
+**Delete cascade:** When deleting a document, always delete its vector embeddings first to prevent orphaned data.
+</Warning>
+
+<Note>
+**Duplicate detection** uses file content hash, not filename. The same file with a different name will be rejected.
+</Note>
+
+---
+
+## Related Services
+
+- [Vector Search Service](/services/vector-service) - Chunks and embeds documents
+- [RAG Service](/services/rag-service) - Searches document chunks to answer questions
+- [Text Processor](/core/utilities#text-processor) - Extracts text from files
+
+## Source Code
+
+Location: `src/Services/DocumentService.php:1-147`

@@ -1,0 +1,437 @@
+---
+title: 'Conversation Service'
+description: 'Manages conversations and message history in the database'
+icon: 'comments'
+---
+
+## Overview
+
+The `ConversationService` handles all conversation and message management operations. It creates and tracks user conversations, stores messages with metadata, and provides conversation history and statistics.
+
+## Class Structure
+
+**Namespace:** `App\Services`
+
+**Dependencies:**
+- `Database` - Database connection for persistence
+
+### Constructor
+
+```php
+public function __construct(Database $db)
+```
+
+<ParamField path="db" type="Database" required>
+  Database instance for all conversation operations
+</ParamField>
+
+---
+
+## Public Methods
+
+### getOrCreateConversation
+
+Retrieves an existing conversation or creates a new one for a phone number.
+
+```php
+public function getOrCreateConversation(
+    string $phoneNumber, 
+    string $contactName = null
+): array
+```
+
+<ParamField path="phoneNumber" type="string" required>
+  User's WhatsApp phone number (unique identifier)
+</ParamField>
+
+<ParamField path="contactName" type="string">
+  Display name for the contact
+</ParamField>
+
+**Returns:** Array containing conversation record with fields:
+- `id` - Conversation ID
+- `phone_number` - User's phone
+- `contact_name` - Contact display name
+- `status` - Conversation status (`active`, `pending_human`, etc.)
+- `ai_enabled` - Whether AI responses are enabled (1/0)
+- `created_at` - Creation timestamp
+- `last_message_at` - Last activity timestamp
+
+**Behavior:**
+- If conversation exists, updates `last_message_at` and returns it
+- If new, creates with status `active` and `ai_enabled = 1`
+
+<CodeGroup>
+```php webhook.php
+$conversationService = new ConversationService($db);
+
+$conversation = $conversationService->getOrCreateConversation(
+    $messageData['from'],
+    $messageData['contact_name']
+);
+
+// Returns:
+// [
+//   'id' => 42,
+//   'phone_number' => '573001234567',
+//   'contact_name' => 'Juan Pérez',
+//   'status' => 'active',
+//   'ai_enabled' => 1,
+//   'created_at' => '2026-03-06 10:30:00',
+//   'last_message_at' => '2026-03-06 10:30:00'
+// ]
+```
+</CodeGroup>
+
+---
+
+### addMessage
+
+Stores a new message in the conversation history.
+
+```php
+public function addMessage(
+    int $conversationId,
+    string $senderType,
+    string $messageText,
+    string $messageId = null,
+    string $contextUsed = null,
+    float $confidenceScore = null,
+    string $audioUrl = null,
+    string $mediaType = 'text'
+): int
+```
+
+<ParamField path="conversationId" type="int" required>
+  ID of the conversation
+</ParamField>
+
+<ParamField path="senderType" type="string" required>
+  Either `user` or `bot`
+</ParamField>
+
+<ParamField path="messageText" type="string" required>
+  The message content
+</ParamField>
+
+<ParamField path="messageId" type="string">
+  WhatsApp message ID (for deduplication)
+</ParamField>
+
+<ParamField path="contextUsed" type="string">
+  RAG context used to generate the response
+</ParamField>
+
+<ParamField path="confidenceScore" type="float">
+  AI confidence score (0.0-1.0)
+</ParamField>
+
+<ParamField path="audioUrl" type="string">
+  Path to audio file if message is audio
+</ParamField>
+
+<ParamField path="mediaType" type="string" default="text">
+  Message type: `text`, `audio`, `image`, etc.
+</ParamField>
+
+**Returns:** Integer ID of the inserted message
+
+<CodeGroup>
+```php User Message
+// Store user message
+$messageId = $conversationService->addMessage(
+    $conversation['id'],
+    'user',
+    $messageData['text'],
+    $messageData['message_id'],
+    null,
+    null,
+    $messageData['audio_url'] ?? null,
+    $messageData['type']
+);
+```
+
+```php Bot Response
+// Store bot response with RAG metadata
+$conversationService->addMessage(
+    $conversation['id'],
+    'bot',
+    $response,
+    null,
+    $ragResult['context'] ?? null,
+    $ragResult['confidence_score'] ?? null
+);
+```
+</CodeGroup>
+
+---
+
+### getConversationHistory
+
+Retrieves recent messages from a conversation.
+
+```php
+public function getConversationHistory(
+    int $conversationId, 
+    int $limit = 50
+): array
+```
+
+<ParamField path="conversationId" type="int" required>
+  ID of the conversation
+</ParamField>
+
+<ParamField path="limit" type="int" default="50">
+  Maximum number of messages to retrieve
+</ParamField>
+
+**Returns:** Array of message records, ordered by `created_at DESC` (newest first)
+
+```php
+$history = $conversationService->getConversationHistory($conversation['id'], 20);
+
+// Each message contains:
+// [
+//   'id' => 123,
+//   'conversation_id' => 42,
+//   'message_id' => 'wamid.ABC123...',
+//   'sender_type' => 'user',
+//   'message_text' => 'Hello',
+//   'audio_url' => null,
+//   'media_type' => 'text',
+//   'context_used' => null,
+//   'confidence_score' => null,
+//   'created_at' => '2026-03-06 10:30:15'
+// ]
+```
+
+---
+
+### getAllConversations
+
+Retrieves all conversations with their last message.
+
+```php
+public function getAllConversations(
+    string $status = null, 
+    int $limit = 100
+): array
+```
+
+<ParamField path="status" type="string">
+  Filter by status: `active`, `pending_human`, `archived`, etc.
+</ParamField>
+
+<ParamField path="limit" type="int" default="100">
+  Maximum conversations to retrieve
+</ParamField>
+
+**Returns:** Array of conversations with last message details, ordered by `last_message_at DESC`
+
+```php
+// Get all active conversations
+$conversations = $conversationService->getAllConversations('active', 50);
+
+// Get all conversations
+$allConversations = $conversationService->getAllConversations();
+```
+
+---
+
+### updateConversationStatus
+
+Changes the status of a conversation.
+
+```php
+public function updateConversationStatus(
+    int $conversationId, 
+    string $status
+): bool
+```
+
+<ParamField path="conversationId" type="int" required>
+  ID of the conversation
+</ParamField>
+
+<ParamField path="status" type="string" required>
+  New status: `active`, `pending_human`, `archived`, etc.
+</ParamField>
+
+**Returns:** Boolean indicating success
+
+<CodeGroup>
+```php Escalate to Human
+// When AI can't handle the conversation
+if ($ragResult['confidence_score'] < 0.5) {
+    $conversationService->updateConversationStatus(
+        $conversation['id'],
+        'pending_human'
+    );
+}
+```
+
+```php Archive Conversation
+$conversationService->updateConversationStatus(
+    $conversationId,
+    'archived'
+);
+```
+</CodeGroup>
+
+---
+
+### getConversationStats
+
+Retrieves aggregate statistics about conversations and messages.
+
+```php
+public function getConversationStats(): array
+```
+
+**Returns:** Array with statistics:
+
+```php
+$stats = $conversationService->getConversationStats();
+
+// Returns:
+// [
+//   'total' => 150,              // Total conversations
+//   'active' => 45,              // Active conversations
+//   'pending_human' => 3,        // Waiting for human agent
+//   'total_messages' => 2847     // Total messages across all conversations
+// ]
+```
+
+<Note>
+Use this method for dashboard statistics and monitoring conversation volume.
+</Note>
+
+---
+
+## Database Schema
+
+### conversations Table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INT | Primary key |
+| `phone_number` | VARCHAR | WhatsApp phone number |
+| `contact_name` | VARCHAR | User's display name |
+| `status` | VARCHAR | `active`, `pending_human`, `archived` |
+| `ai_enabled` | TINYINT | Whether AI is enabled (1/0) |
+| `created_at` | TIMESTAMP | Creation time |
+| `last_message_at` | TIMESTAMP | Last activity |
+| `last_bot_message_at` | TIMESTAMP | Last bot response time |
+
+### messages Table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INT | Primary key |
+| `conversation_id` | INT | Foreign key to conversations |
+| `message_id` | VARCHAR | WhatsApp message ID |
+| `sender_type` | ENUM | `user` or `bot` |
+| `message_text` | TEXT | Message content |
+| `audio_url` | VARCHAR | Audio file path |
+| `media_type` | VARCHAR | `text`, `audio`, etc. |
+| `context_used` | TEXT | RAG context used |
+| `confidence_score` | DECIMAL | AI confidence (0.0-1.0) |
+| `created_at` | TIMESTAMP | Message time |
+
+---
+
+## Usage Examples
+
+### Complete Conversation Flow
+
+<CodeGroup>
+```php webhook.php
+$conversationService = new ConversationService($db);
+
+// 1. Get or create conversation
+$conversation = $conversationService->getOrCreateConversation(
+    $messageData['from'],
+    $messageData['contact_name']
+);
+
+// 2. Store user message
+$conversationService->addMessage(
+    $conversation['id'],
+    'user',
+    $messageData['text'],
+    $messageData['message_id']
+);
+
+// 3. Get conversation history for context
+$history = $conversationService->getConversationHistory(
+    $conversation['id'],
+    10
+);
+
+// 4. Generate response (using other services)
+$response = $ragService->generateResponse(...);
+
+// 5. Store bot response
+$conversationService->addMessage(
+    $conversation['id'],
+    'bot',
+    $response['text'],
+    null,
+    $response['context'],
+    $response['confidence']
+);
+
+// 6. Update last bot message timestamp
+$db->query(
+    'UPDATE conversations SET last_bot_message_at = NOW() WHERE id = :id',
+    [':id' => $conversation['id']]
+);
+```
+
+```php Dashboard View
+// Get all active conversations for dashboard
+$conversationService = new ConversationService($db);
+$activeConversations = $conversationService->getAllConversations('active', 50);
+$stats = $conversationService->getConversationStats();
+
+foreach ($activeConversations as $conv) {
+    echo "Phone: {$conv['phone_number']}\n";
+    echo "Name: {$conv['contact_name']}\n";
+    echo "Last message: {$conv['last_message']}\n";
+    echo "From: {$conv['last_sender_type']}\n";
+    echo "Time: {$conv['last_message_created_at']}\n\n";
+}
+
+echo "Total conversations: {$stats['total']}\n";
+echo "Active: {$stats['active']}\n";
+echo "Pending human: {$stats['pending_human']}\n";
+```
+</CodeGroup>
+
+---
+
+## Best Practices
+
+<Note>
+**Always use `getOrCreateConversation` before adding messages** to ensure the conversation exists and is properly tracked.
+</Note>
+
+<Warning>
+**Message deduplication:** Always pass the `messageId` from WhatsApp when storing user messages to prevent duplicate processing.
+</Warning>
+
+<Tip>
+**Conversation history for AI context:** Use `getConversationHistory` to build conversation context for AI responses. The history is returned newest-first, so reverse it if needed.
+</Tip>
+
+---
+
+## Related Services
+
+- [RAG Service](/services/rag-service) - Uses conversation history for context
+- [WhatsApp Service](/services/whatsapp-service) - Sends messages and triggers conversation creation
+- [Calendar Flow Handler](/services/calendar-service) - References conversation IDs in flow state
+
+## Source Code
+
+Location: `src/Services/ConversationService.php:1-124`

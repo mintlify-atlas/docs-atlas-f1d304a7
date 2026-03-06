@@ -1,0 +1,166 @@
+---
+title: 'Health Check'
+api: 'GET /api/health.php'
+description: 'Check system health status including database, OpenAI service, disk, and memory'
+---
+
+## Overview
+
+The health check endpoint provides comprehensive system status information, including database connectivity, OpenAI service status, active conversations, disk usage, and memory consumption.
+
+## Endpoint
+
+```
+GET /api/health.php
+```
+
+## Response
+
+<ResponseField name="status" type="string" required>
+  Overall system health status
+  - `healthy`: All systems operational
+  - `unhealthy`: One or more critical systems down
+</ResponseField>
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp of the health check
+</ResponseField>
+
+<ResponseField name="checks" type="object" required>
+  Detailed health check results for each subsystem
+  
+  <ResponseField name="database" type="object">
+    Database connectivity status
+    <ResponseField name="status" type="string">
+      `up` or `down`
+    </ResponseField>
+    <ResponseField name="latency_ms" type="number">
+      Database query latency in milliseconds
+    </ResponseField>
+    <ResponseField name="error" type="string">
+      Error message if database is down
+    </ResponseField>
+  </ResponseField>
+  
+  <ResponseField name="openai" type="object">
+    OpenAI service status
+    <ResponseField name="status" type="string">
+      Service status: `operational`, `degraded`, or `unknown`
+    </ResponseField>
+    <ResponseField name="message" type="string">
+      Status message (e.g., "Insufficient funds", "OK")
+    </ResponseField>
+    <ResponseField name="error" type="string">
+      Error message if status check failed
+    </ResponseField>
+  </ResponseField>
+  
+  <ResponseField name="active_conversations" type="number">
+    Count of active conversations in the system
+  </ResponseField>
+  
+  <ResponseField name="disk" type="object">
+    Disk usage information
+    <ResponseField name="free_gb" type="number">
+      Free disk space in gigabytes
+    </ResponseField>
+    <ResponseField name="usage_percent" type="number">
+      Disk usage percentage
+    </ResponseField>
+    <ResponseField name="status" type="string">
+      `critical` if usage > 90%, otherwise `ok`
+    </ResponseField>
+  </ResponseField>
+  
+  <ResponseField name="memory" type="object">
+    Memory usage information
+    <ResponseField name="usage_mb" type="number">
+      Current memory usage in megabytes
+    </ResponseField>
+    <ResponseField name="peak_mb" type="number">
+      Peak memory usage in megabytes
+    </ResponseField>
+  </ResponseField>
+</ResponseField>
+
+## Status Codes
+
+- `200 OK`: System is healthy
+- `503 Service Unavailable`: System is unhealthy (one or more checks failed)
+
+## Example Response
+
+<CodeGroup>
+
+```json Healthy System
+{
+  "status": "healthy",
+  "timestamp": "2024-03-06T10:30:00+00:00",
+  "checks": {
+    "database": {
+      "status": "up",
+      "latency_ms": 0
+    },
+    "openai": {
+      "status": "operational",
+      "message": "OK"
+    },
+    "active_conversations": 42,
+    "disk": {
+      "free_gb": 125.43,
+      "usage_percent": 35.67,
+      "status": "ok"
+    },
+    "memory": {
+      "usage_mb": 24.5,
+      "peak_mb": 28.3
+    }
+  }
+}
+```
+
+```json Unhealthy System
+{
+  "status": "unhealthy",
+  "timestamp": "2024-03-06T10:30:00+00:00",
+  "checks": {
+    "database": {
+      "status": "down",
+      "error": "Connection failed"
+    },
+    "openai": {
+      "status": "degraded",
+      "message": "Insufficient funds"
+    },
+    "active_conversations": "error",
+    "disk": {
+      "free_gb": 5.21,
+      "usage_percent": 92.5,
+      "status": "critical"
+    },
+    "memory": {
+      "usage_mb": 156.7,
+      "peak_mb": 203.4
+    }
+  }
+}
+```
+
+</CodeGroup>
+
+## Implementation Details
+
+The health check performs the following operations:
+
+1. **Database Check**: Executes `SELECT 1` to verify connectivity
+2. **OpenAI Status**: Retrieves `openai_status` from settings table
+3. **Active Conversations**: Counts conversations with `status = "active"`
+4. **Disk Usage**: Checks available disk space and calculates usage percentage
+5. **Memory Usage**: Reports current and peak PHP memory consumption
+
+## Use Cases
+
+- **Monitoring**: Integrate with monitoring tools (Prometheus, Datadog, etc.)
+- **Load Balancers**: Configure health checks for automated failover
+- **Alerting**: Trigger alerts when system becomes unhealthy
+- **Status Pages**: Display real-time system status to users

@@ -1,0 +1,249 @@
+---
+title: 'Upload Document'
+api: 'POST /api/upload'
+description: 'Upload and index a document for RAG-powered WhatsApp responses'
+---
+
+## Overview
+
+This endpoint handles document upload and automatically processes it through the RAG (Retrieval-Augmented Generation) pipeline. The document is:
+
+1. Validated and stored
+2. Text extracted based on file type
+3. Split into chunks with configurable size and overlap
+4. Converted to embeddings using OpenAI's embedding model
+5. Stored as vectors for semantic search
+
+## Request
+
+<ParamField body="document" type="file" required>
+  The document file to upload. Supported formats:
+  - **PDF** (.pdf) - Extracted using text processing utilities
+  - **DOCX** (.docx) - Microsoft Word documents
+  - **TXT** (.txt) - Plain text files
+  
+  Maximum file size is configurable via `uploads.max_size` config.
+</ParamField>
+
+## Request Details
+
+**Content-Type:** `multipart/form-data`
+
+**File Validation:**
+- File type checked against `allowedTypes` configuration (api/upload.php:24)
+- File size validated against `maxSize` limit (api/upload.php:25)
+- Duplicate detection using MD5 hash (DocumentService.php:53)
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates whether the upload and indexing succeeded
+</ResponseField>
+
+<ResponseField name="document" type="object">
+  Contains details about the uploaded document
+  
+  <ResponseField name="document.id" type="integer">
+    Database ID of the uploaded document
+  </ResponseField>
+  
+  <ResponseField name="document.filename" type="string">
+    Original filename of the uploaded document
+  </ResponseField>
+  
+  <ResponseField name="document.chunks" type="integer">
+    Number of text chunks created and indexed for RAG retrieval
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the upload failed
+</ResponseField>
+
+## RAG Indexing Process
+
+After successful upload, the document goes through automatic indexing (api/upload.php:64-69):
+
+```php
+$chunksIndexed = $rag->indexDocument(
+    $document['id'],
+    $document['text'],
+    Config::get('rag.chunk_size'),
+    Config::get('rag.chunk_overlap')
+);
+```
+
+### Text Extraction
+
+Text is extracted using `TextProcessor::extractText()` (DocumentService.php:52):
+- **PDF**: Uses text extraction utilities
+- **DOCX**: Parses Word document structure
+- **TXT**: Direct file read
+
+### Chunking Strategy
+
+- **Chunk Size**: Configured via `rag.chunk_size` (typically 500-1000 tokens)
+- **Chunk Overlap**: Configured via `rag.chunk_overlap` (typically 50-200 tokens)
+- Overlap ensures context continuity between chunks
+
+### Embedding Generation
+
+Each chunk is converted to a vector embedding using OpenAI's embedding model (api/upload.php:36-40):
+
+```php
+$openai = new OpenAIService(
+    $oaiCreds['api_key'],
+    $oaiCreds['model'],
+    $oaiCreds['embedding_model'],
+    $logger
+);
+```
+
+### Vector Storage
+
+Embeddings are stored in the `vectors` table with:
+- Document ID reference
+- Chunk text
+- Chunk index (position in document)
+- Vector embedding (for similarity search)
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST https://your-domain.com/api/upload \
+  -F "document=@./company-handbook.pdf"
+```
+
+```javascript JavaScript
+const formData = new FormData();
+formData.append('document', fileInput.files[0]);
+
+const response = await fetch('/api/upload', {
+  method: 'POST',
+  body: formData
+});
+
+const result = await response.json();
+console.log(`Indexed ${result.document.chunks} chunks`);
+```
+
+```python Python
+import requests
+
+with open('company-handbook.pdf', 'rb') as f:
+    files = {'document': f}
+    response = requests.post(
+        'https://your-domain.com/api/upload',
+        files=files
+    )
+    
+result = response.json()
+print(f"Indexed {result['document']['chunks']} chunks")
+```
+
+```php PHP
+$curl = curl_init();
+
+curl_setopt_array($curl, [
+    CURLOPT_URL => 'https://your-domain.com/api/upload',
+    CURLOPT_POST => true,
+    CURLOPT_POSTFIELDS => [
+        'document' => new CURLFile('company-handbook.pdf')
+    ],
+    CURLOPT_RETURNTRANSFER => true
+]);
+
+$response = curl_exec($curl);
+$result = json_decode($response, true);
+
+echo "Indexed {$result['document']['chunks']} chunks";
+```
+
+</CodeGroup>
+
+## Success Response
+
+```json
+{
+  "success": true,
+  "document": {
+    "id": 42,
+    "filename": "company-handbook.pdf",
+    "chunks": 127
+  }
+}
+```
+
+## Error Responses
+
+### Missing File
+
+```json
+{
+  "success": false,
+  "error": "Error al subir documento"
+}
+```
+
+### Duplicate Document
+
+```json
+{
+  "success": false,
+  "error": "Documento duplicado: 'company-handbook.pdf' ya fue subido previamente"
+}
+```
+
+### Invalid File Type
+
+```json
+{
+  "success": false,
+  "error": "Error al subir documento"
+}
+```
+
+## Implementation Details
+
+### Credential Resolution
+
+The endpoint attempts to load OpenAI credentials from database first, then falls back to config (api/upload.php:30-51):
+
+```php
+try {
+    $encryption = new EncryptionService();
+    $credentialService = new CredentialService($db, $encryption);
+    if ($credentialService->hasOpenAICredentials()) {
+        $oaiCreds = $credentialService->getOpenAICredentials();
+        $openai = new OpenAIService(
+            $oaiCreds['api_key'],
+            $oaiCreds['model'],
+            $oaiCreds['embedding_model'],
+            $logger
+        );
+    }
+} catch (\Exception $credEx) {
+    // Fallback to config file credentials
+    $openai = new OpenAIService(
+        Config::get('openai.api_key'),
+        Config::get('openai.model'),
+        Config::get('openai.embedding_model'),
+        $logger
+    );
+}
+```
+
+### Vector Search Configuration
+
+Similarity method is configurable (api/upload.php:53):
+- `cosine` - Cosine similarity (default)
+- `euclidean` - Euclidean distance
+- `dot_product` - Dot product similarity
+
+## Related Endpoints
+
+- [Get Documents](/api/documents/get-documents) - List all uploaded documents
+- [Delete Document](/api/documents/delete) - Remove document and its vectors
+- [Get Document Content](/api/documents/get-content) - Retrieve document text chunks

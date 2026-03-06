@@ -1,0 +1,231 @@
+---
+title: 'Get Messages'
+api: 'GET /api/conversations/{id}/messages'
+description: 'Retrieve paginated messages for a specific conversation'
+---
+
+## Endpoint
+
+```
+GET /api/conversations/{id}/messages
+```
+
+Fetches messages for a specific conversation with pagination support. Messages are returned in chronological order (oldest first).
+
+## Path Parameters
+
+<ParamField path="id" type="integer" required>
+  The unique identifier of the conversation
+</ParamField>
+
+## Query Parameters
+
+<ParamField query="offset" type="integer" default="0" optional>
+  Number of messages to skip for pagination
+</ParamField>
+
+<ParamField query="limit" type="integer" default="20" optional>
+  Maximum number of messages to return (max: 20)
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the request was successful
+</ResponseField>
+
+<ResponseField name="messages" type="array" required>
+  Array of message objects in chronological order
+  
+  <ResponseField name="id" type="integer">
+    Unique message identifier
+  </ResponseField>
+  
+  <ResponseField name="sender_type" type="string">
+    Who sent the message: `customer`, `ai`, or `human`
+  </ResponseField>
+  
+  <ResponseField name="message_text" type="string">
+    The text content of the message
+  </ResponseField>
+  
+  <ResponseField name="audio_url" type="string">
+    URL to audio file if the message is a voice message (null for text messages)
+  </ResponseField>
+  
+  <ResponseField name="media_type" type="string">
+    Type of media: `text`, `audio`, `image`, `video`, or `document`
+  </ResponseField>
+  
+  <ResponseField name="context_used" type="string">
+    RAG context that was used to generate AI response (null for non-AI messages)
+  </ResponseField>
+  
+  <ResponseField name="confidence_score" type="float">
+    AI confidence score for the response (0-1, null for non-AI messages)
+  </ResponseField>
+  
+  <ResponseField name="created_at" type="string">
+    Timestamp when the message was created in ISO 8601 format
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="has_more" type="boolean" required>
+  Indicates if there are more messages available to fetch
+</ResponseField>
+
+<ResponseField name="total" type="integer" required>
+  Total number of messages in the conversation
+</ResponseField>
+
+<ResponseField name="server_time" type="string" required>
+  Current server time in ISO 8601 format
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the request failed (only present when `success` is false)
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET 'https://your-domain.com/api/conversations/1/messages'
+```
+
+```bash cURL (with pagination)
+curl -X GET 'https://your-domain.com/api/conversations/1/messages?offset=20&limit=20'
+```
+
+```javascript JavaScript
+const conversationId = 1;
+const offset = 0;
+const limit = 20;
+
+const response = await fetch(
+  `/api/conversations/${conversationId}/messages?offset=${offset}&limit=${limit}`
+);
+const data = await response.json();
+
+if (data.success) {
+  console.log(`Loaded ${data.messages.length} of ${data.total} messages`);
+  data.messages.forEach(msg => {
+    console.log(`[${msg.sender_type}] ${msg.message_text}`);
+  });
+  
+  if (data.has_more) {
+    console.log('More messages available');
+  }
+}
+```
+
+```php PHP
+$conversationId = 1;
+$offset = 0;
+$limit = 20;
+
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, 
+  "https://your-domain.com/api/conversations/{$conversationId}/messages?offset={$offset}&limit={$limit}"
+);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+$response = curl_exec($ch);
+$data = json_decode($response, true);
+
+if ($data['success']) {
+    foreach ($data['messages'] as $message) {
+        echo "[{$message['sender_type']}] {$message['message_text']}\n";
+    }
+    
+    if ($data['has_more']) {
+        echo "More messages available\n";
+    }
+}
+```
+
+</CodeGroup>
+
+## Response Examples
+
+### Success Response
+
+```json
+{
+  "success": true,
+  "messages": [
+    {
+      "id": 45,
+      "sender_type": "customer",
+      "message_text": "Hello, I have a question about my order",
+      "audio_url": null,
+      "media_type": "text",
+      "context_used": null,
+      "confidence_score": null,
+      "created_at": "2024-01-15 10:30:00"
+    },
+    {
+      "id": 46,
+      "sender_type": "ai",
+      "message_text": "I'd be happy to help you with your order. Could you please provide your order number?",
+      "audio_url": null,
+      "media_type": "text",
+      "context_used": "Order tracking and support documentation",
+      "confidence_score": 0.92,
+      "created_at": "2024-01-15 10:30:05"
+    },
+    {
+      "id": 47,
+      "sender_type": "customer",
+      "message_text": "My order number is #12345",
+      "audio_url": null,
+      "media_type": "text",
+      "context_used": null,
+      "confidence_score": null,
+      "created_at": "2024-01-15 10:31:00"
+    }
+  ],
+  "has_more": false,
+  "total": 3,
+  "server_time": "2024-01-15 14:45:30"
+}
+```
+
+### Error Response (Missing ID)
+
+```json
+{
+  "success": false,
+  "error": "Error al obtener mensajes"
+}
+```
+
+## Implementation Details
+
+The endpoint is implemented in `api/get-conversation-messages.php` and performs a direct SQL query on the `messages` table with pagination.
+
+Route pattern (from `index.php:166`):
+```php
+if ($requestMethod === 'GET' && 
+    preg_match('#^/api/conversations/(\d+)/messages$#', $path, $matches)) {
+    $_GET['id'] = $matches[1];
+    require __DIR__ . '/api/get-conversation-messages.php';
+}
+```
+
+SQL Query (from `get-conversation-messages.php:28-34`):
+```sql
+SELECT id, sender_type, message_text, audio_url, media_type, 
+       context_used, confidence_score, created_at 
+FROM messages 
+WHERE conversation_id = :conversation_id 
+ORDER BY created_at DESC 
+LIMIT {limit} OFFSET {offset}
+```
+
+## Notes
+
+- Messages are fetched in reverse chronological order (newest first) from the database, then reversed before returning to the client (oldest first)
+- The `has_more` field helps implement infinite scroll pagination
+- Returns HTTP 500 status code on error
+- The conversation ID is required; missing it will result in an error

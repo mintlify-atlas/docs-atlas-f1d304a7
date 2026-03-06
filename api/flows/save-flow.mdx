@@ -1,0 +1,272 @@
+---
+title: "Save Flow"
+api: "POST /api/save-flow.php"
+description: "Create or update a flow node"
+---
+
+## Overview
+
+Creates a new flow node or updates an existing one. Also supports bulk import of flow structures via JSON.
+
+## Request
+
+<ParamField body="id" type="integer">
+  Node ID for updates. Omit or set to `null` to create a new node.
+</ParamField>
+
+<ParamField body="parent_id" type="integer | null">
+  ID of parent node. Use `null` for root nodes.
+</ParamField>
+
+<ParamField body="node_type" type="string" required>
+  Type of node:
+  - `"message"` - Bot sends a message
+  - `"question"` - Bot asks a question
+  - `"menu"` - Multiple choice options
+  - `"end"` - Conversation endpoint
+</ParamField>
+
+<ParamField body="content" type="string" required>
+  Message text, question, or prompt to display
+</ParamField>
+
+<ParamField body="options" type="array">
+  Array of menu options (required for `node_type: "menu"`)
+  
+  Each option should have:
+  - `label` (string): Display text
+  - `value` (string): Option value/identifier
+</ParamField>
+
+<ParamField body="metadata" type="object">
+  Additional configuration:
+  - `validation` (string): Validation type for questions (`"text"`, `"email"`, `"phone"`, etc.)
+  - `required` (boolean): Whether response is mandatory
+  - `action` (string): Special action to trigger
+  - Custom key-value pairs
+</ParamField>
+
+<ParamField body="order_position" type="integer">
+  Display order among sibling nodes (defaults to next available position)
+</ParamField>
+
+### Import Mode
+
+<ParamField body="_import" type="boolean">
+  Set to `true` to enable bulk import mode
+</ParamField>
+
+<ParamField body="json" type="array">
+  Array of node objects to import (required when `_import: true`)
+</ParamField>
+
+## Examples
+
+<CodeGroup>
+```bash Create Message Node
+curl -X POST https://your-domain.com/api/save-flow.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parent_id": null,
+    "node_type": "message",
+    "content": "¡Bienvenido a nuestro servicio!",
+    "order_position": 1
+  }'
+```
+
+```bash Create Menu Node
+curl -X POST https://your-domain.com/api/save-flow.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parent_id": 1,
+    "node_type": "menu",
+    "content": "¿Qué deseas hacer?",
+    "options": [
+      {"label": "Ver productos", "value": "1"},
+      {"label": "Soporte", "value": "2"},
+      {"label": "Contacto", "value": "3"}
+    ],
+    "order_position": 1
+  }'
+```
+
+```bash Create Question Node
+curl -X POST https://your-domain.com/api/save-flow.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "parent_id": 2,
+    "node_type": "question",
+    "content": "¿Cuál es tu correo electrónico?",
+    "metadata": {
+      "validation": "email",
+      "required": true
+    },
+    "order_position": 1
+  }'
+```
+
+```bash Update Existing Node
+curl -X POST https://your-domain.com/api/save-flow.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "id": 5,
+    "content": "Updated message text",
+    "metadata": {
+      "updated": true
+    }
+  }'
+```
+
+```bash Import Flow Structure
+curl -X POST https://your-domain.com/api/save-flow.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "_import": true,
+    "json": [
+      {
+        "node_type": "message",
+        "content": "Welcome!",
+        "parent_id": null
+      },
+      {
+        "node_type": "menu",
+        "content": "Choose option:",
+        "parent_id": null,
+        "options": [
+          {"label": "Option 1", "value": "1"},
+          {"label": "Option 2", "value": "2"}
+        ]
+      }
+    ]
+  }'
+```
+</CodeGroup>
+
+## Response
+
+### Standard Mode
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the node was saved successfully
+</ResponseField>
+
+<ResponseField name="node_id" type="integer">
+  ID of the created or updated node
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error description (only present on failure)
+</ResponseField>
+
+#### Success Response Example
+
+```json
+{
+  "success": true,
+  "node_id": 42
+}
+```
+
+### Import Mode
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if import was successful
+</ResponseField>
+
+<ResponseField name="imported_nodes" type="integer">
+  Number of nodes successfully imported
+</ResponseField>
+
+#### Import Success Response
+
+```json
+{
+  "success": true,
+  "imported_nodes": 15
+}
+```
+
+### Error Response Examples
+
+```json Validation Error
+{
+  "success": false,
+  "error": "node_type is required"
+}
+```
+
+```json Import Error
+{
+  "success": false,
+  "error": "Campo \"json\" requerido para importación"
+}
+```
+
+```json Invalid JSON
+{
+  "success": false,
+  "error": "JSON inválido"
+}
+```
+
+## Error Handling
+
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Node saved successfully |
+| 400 | Invalid JSON |
+| 405 | Method not allowed (only POST accepted) |
+| 422 | Validation error (invalid node data) |
+| 500 | Internal server error |
+
+## Validation Rules
+
+<Check>
+  `node_type` is required and must be one of: `message`, `question`, `menu`, `end`
+</Check>
+
+<Check>
+  `content` is required for all node types
+</Check>
+
+<Check>
+  `options` array is required when `node_type` is `menu`
+</Check>
+
+<Check>
+  `parent_id` must reference an existing node (or be `null` for root)
+</Check>
+
+<Check>
+  Import mode requires `json` field with array of nodes
+</Check>
+
+## Implementation Details
+
+The endpoint:
+1. Validates request method is POST
+2. Parses and validates JSON input
+3. Checks for import mode (`_import` flag)
+4. For standard mode: calls `FlowBuilderService->saveNode()`
+5. For import mode: calls `FlowBuilderService->importFromJson()`
+6. Returns appropriate success/error response
+7. Logs all operations for audit trail
+
+Source: `api/save-flow.php:11-44`
+
+## Notes
+
+<Info>
+  When updating a node, only include fields you want to change. Omitted fields retain their current values.
+</Info>
+
+<Warning>
+  Importing flows does not delete existing nodes. Use the delete endpoint first if you want a complete replacement.
+</Warning>
+
+## Use Cases
+
+- **Flow Builder**: Create/update nodes via drag-and-drop UI
+- **Bulk Import**: Migrate flows from another system
+- **Templates**: Deploy pre-built flow templates
+- **Version Control**: Import flows from version-controlled JSON files

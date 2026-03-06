@@ -1,0 +1,838 @@
+---
+title: Installation
+description: Complete guide for installing WhatsApp RAG Bot on your server
+---
+
+## Overview
+
+This guide covers both local development and production installation. Follow the appropriate section based on your deployment environment.
+
+<Tabs>
+  <Tab title="Production (cPanel/SiteGround)">
+    For shared hosting environments with cPanel or similar control panels
+  </Tab>
+  <Tab title="VPS/Dedicated Server">
+    For Ubuntu, CentOS, or other Linux distributions with full server access
+  </Tab>
+  <Tab title="Local Development">
+    For testing on Windows, macOS, or Linux workstations
+  </Tab>
+</Tabs>
+
+## System Requirements
+
+### PHP Requirements
+
+The minimum and recommended PHP versions:
+
+```json composer.json
+{
+  "require": {
+    "php": "^7.4 || ^8.0"
+  }
+}
+```
+
+<Note>
+  PHP 8.0 or higher is recommended for better performance and security.
+</Note>
+
+### Required PHP Extensions
+
+<CodeGroup>
+
+```bash Verify Extensions (CLI)
+php -m | grep -E "(curl|json|mbstring|mysqli|zip|xml)"
+```
+
+```php Verify Extensions (Web)
+<?php
+$required = ['curl', 'json', 'mbstring', 'mysqli', 'zip', 'xml'];
+foreach ($required as $ext) {
+    echo $ext . ": " . (extension_loaded($ext) ? "✓" : "✗") . "\n";
+}
+```
+
+</CodeGroup>
+
+Required extensions:
+- **curl** - HTTP requests to WhatsApp and OpenAI APIs
+- **json** - JSON parsing and encoding
+- **mbstring** - Multi-byte string handling
+- **mysqli** - MySQL database connection
+- **zip** - DOCX file processing
+- **xml** - Document parsing
+
+### Database Requirements
+
+- **MySQL**: 5.7+ or **MariaDB**: 10.2+
+- **Character Set**: utf8mb4 (required for emoji support)
+- **Storage**: Minimum 1GB free space (grows with documents)
+- **Privileges**: CREATE, ALTER, INSERT, UPDATE, DELETE, SELECT
+
+### Server Requirements
+
+<Tabs>
+  <Tab title="Minimum">
+    - **Memory**: 512MB RAM
+    - **CPU**: 1 core
+    - **Disk**: 2GB free space
+    - **PHP Memory Limit**: 256M
+    - **Max Execution Time**: 30s
+  </Tab>
+  <Tab title="Recommended">
+    - **Memory**: 1GB+ RAM
+    - **CPU**: 2+ cores
+    - **Disk**: 10GB+ free space
+    - **PHP Memory Limit**: 512M
+    - **Max Execution Time**: 60s
+  </Tab>
+</Tabs>
+
+## Production Installation (cPanel/SiteGround)
+
+### Step 1: Prepare Your Environment
+
+<Steps>
+  <Step title="Create MySQL Database">
+    1. Log into **cPanel**
+    2. Navigate to **MySQL® Databases**
+    3. Create a new database: `username_whatsapp_bot`
+    4. Create a user with a strong password
+    5. Add user to database with **ALL PRIVILEGES**
+    6. Note down: database name, username, password, and host (usually `localhost`)
+  </Step>
+  
+  <Step title="Upload Files">
+    Upload the WhatsApp RAG Bot files to your hosting:
+    
+    **Option A - FTP/SFTP:**
+    ```bash
+    # Connect via FileZilla or similar
+    # Upload entire project to public_html/whatsapp/ or subdomain root
+    ```
+    
+    **Option B - File Manager:**
+    1. Compress project into `whatsapp-bot.zip`
+    2. Upload via cPanel **File Manager**
+    3. Extract in desired location
+  </Step>
+  
+  <Step title="Set Directory Permissions">
+    Using File Manager or FTP client, set permissions:
+    
+    ```bash
+    # Directories
+    logs/     → 755
+    uploads/  → 755
+    config/   → 755
+    
+    # Files
+    .env      → 644 (or 600 for extra security)
+    *.php     → 644
+    ```
+  </Step>
+</Steps>
+
+### Step 2: Install PHP Dependencies
+
+Since shared hosting typically doesn't have Composer, use the built-in download script:
+
+<Warning>
+  This script downloads a pre-built `vendor/` folder. Only use if you can't run Composer directly.
+</Warning>
+
+```bash
+# Navigate to your installation in browser:
+https://yourdomain.com/whatsapp/download-vendor.php?token=download-assets-now
+```
+
+The script will:
+1. Download pre-built vendor packages
+2. Extract to `vendor/` directory
+3. Verify autoloader works
+4. Show success confirmation
+
+**Delete the script after use:**
+```bash
+rm download-vendor.php
+```
+
+<Accordion title="Alternative: Upload vendor folder">
+  If the download script fails:
+  
+  1. Run `composer install` on your local machine
+  2. Compress the `vendor/` folder
+  3. Upload and extract on your server
+  4. Verify `vendor/autoload.php` exists
+</Accordion>
+
+### Step 3: Database Setup
+
+Import the database schema using phpMyAdmin:
+
+<Steps>
+  <Step title="Access phpMyAdmin">
+    In cPanel, click **phpMyAdmin**
+  </Step>
+  
+  <Step title="Select Database">
+    Click on your newly created database in the left sidebar
+  </Step>
+  
+  <Step title="Import Schema">
+    1. Click the **Import** tab
+    2. Click **Choose File**
+    3. Select `database/schema.sql` from your local copy
+    4. Ensure **Character set**: `utf8mb4`
+    5. Click **Go**
+    
+    You should see:
+    ```
+    Import has been successfully finished, 15 queries executed.
+    ```
+  </Step>
+  
+  <Step title="Verify Tables">
+    Click on your database and confirm these tables exist:
+    - `bot_credentials`
+    - `calendar_flow_state`
+    - `calendar_settings`
+    - `classic_calendar_sessions`
+    - `classic_flow_sessions`
+    - `conversations`
+    - `documents`
+    - `flow_nodes`
+    - `flow_options`
+    - `google_oauth_credentials`
+    - `messages`
+    - `onboarding_progress`
+    - `query_embedding_cache`
+    - `settings`
+    - `vectors`
+  </Step>
+</Steps>
+
+<CodeGroup>
+
+```sql schema.sql (excerpt)
+CREATE TABLE IF NOT EXISTS documents (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    filename VARCHAR(255) NOT NULL,
+    original_name VARCHAR(255) NOT NULL,
+    file_type VARCHAR(50) NOT NULL,
+    content_text LONGTEXT NOT NULL,
+    chunk_count INT DEFAULT 0,
+    file_size INT NOT NULL,
+    file_hash VARCHAR(32),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY idx_file_hash (file_hash)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+```sql vectors table
+CREATE TABLE IF NOT EXISTS vectors (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    document_id INT NOT NULL,
+    chunk_text TEXT NOT NULL,
+    chunk_index INT NOT NULL,
+    embedding BLOB NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (document_id) REFERENCES documents(id) ON DELETE CASCADE,
+    INDEX idx_document (document_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+</CodeGroup>
+
+### Step 4: Configure Environment
+
+Create `.env` file in the project root:
+
+```bash .env
+# ============================================
+# DATABASE CONFIGURATION
+# ============================================
+DB_HOST=localhost
+DB_PORT=3306
+DB_NAME=username_whatsapp_bot
+DB_USER=username_dbuser
+DB_PASSWORD=your_secure_password
+
+# ============================================
+# WHATSAPP BUSINESS API
+# ============================================
+# Get these from Meta Developer Console
+WHATSAPP_ACCESS_TOKEN=EAAxxxxxxxxxx
+WHATSAPP_PHONE_NUMBER_ID=123456789
+WHATSAPP_VERIFY_TOKEN=my_custom_verify_token_2024
+WHATSAPP_APP_SECRET=abc123def456
+
+# ============================================
+# OPENAI CONFIGURATION
+# ============================================
+OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxx
+OPENAI_MODEL=gpt-3.5-turbo
+OPENAI_EMBEDDING_MODEL=text-embedding-ada-002
+
+# ============================================
+# APPLICATION SETTINGS
+# ============================================
+APP_BASE_URL=https://yourdomain.com
+APP_DEBUG=false
+
+# ============================================
+# OPTIONAL: GOOGLE CALENDAR
+# ============================================
+# GOOGLE_CLIENT_ID=your-client-id.apps.googleusercontent.com
+# GOOGLE_CLIENT_SECRET=your-client-secret
+```
+
+<Note>
+  Store your `.env` file **outside** the public web directory if possible, or ensure it's protected by `.htaccess`
+</Note>
+
+### Step 5: Configure Web Server
+
+The project includes an `.htaccess` file for Apache:
+
+```apache .htaccess
+RewriteEngine On
+RewriteBase /whatsapp/
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+# Security Headers
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+</IfModule>
+
+# PHP Configuration
+<IfModule mod_php.c>
+    php_value upload_max_filesize 10M
+    php_value post_max_size 10M
+    php_value max_execution_time 60
+    php_value memory_limit 512M
+</IfModule>
+
+# Protect sensitive files
+<Files ".env">
+    Order allow,deny
+    Deny from all
+</Files>
+```
+
+<Accordion title="Adjust RewriteBase for subdirectory">
+  If installing in a subdirectory, update:
+  
+  ```apache
+  # For https://yourdomain.com/whatsapp/
+  RewriteBase /whatsapp/
+  
+  # For https://yourdomain.com/ (root)
+  RewriteBase /
+  
+  # For https://bot.yourdomain.com/ (subdomain)
+  RewriteBase /
+  ```
+</Accordion>
+
+### Step 6: Verify Installation
+
+Run the system check to ensure everything is configured correctly:
+
+```bash
+https://yourdomain.com/whatsapp/check_system.php?token=check_now
+```
+
+<CodeGroup>
+
+```php check_system.php (excerpt)
+// Verifies:
+$required_extensions = ['curl', 'json', 'mbstring', 'mysqli', 'zip', 'xml'];
+foreach ($required_extensions as $ext) {
+    $loaded = extension_loaded($ext);
+    // Display results...
+}
+
+// Test database connection
+$conn = new mysqli($db_host, $db_user, $db_pass, $db_name);
+if ($conn->connect_error) {
+    echo "Database connection failed";
+} else {
+    echo "✓ Connected to {$db_name}";
+}
+
+// Test autoloader
+require_once __DIR__ . '/vendor/autoload.php';
+// Check core classes exist...
+```
+
+</CodeGroup>
+
+Expected output:
+- ✓ PHP Version 7.4+
+- ✓ All required extensions loaded
+- ✓ `vendor/autoload.php` exists
+- ✓ Database connection successful
+- ✓ Directories writable
+
+<Warning>
+  **Delete `check_system.php` immediately after verification!**
+  
+  ```bash
+  rm check_system.php
+  ```
+  
+  This file exposes sensitive system information.
+</Warning>
+
+## VPS/Dedicated Server Installation
+
+### Step 1: Install LAMP Stack
+
+<Tabs>
+  <Tab title="Ubuntu/Debian">
+    ```bash
+    # Update packages
+    sudo apt update && sudo apt upgrade -y
+    
+    # Install Apache
+    sudo apt install apache2 -y
+    
+    # Install MySQL
+    sudo apt install mysql-server -y
+    
+    # Install PHP 8.1 with extensions
+    sudo apt install php8.1 php8.1-cli php8.1-fpm php8.1-mysql \
+      php8.1-curl php8.1-json php8.1-mbstring php8.1-xml \
+      php8.1-zip -y
+    
+    # Enable Apache modules
+    sudo a2enmod rewrite headers
+    sudo systemctl restart apache2
+    ```
+  </Tab>
+  
+  <Tab title="CentOS/RHEL">
+    ```bash
+    # Install Apache
+    sudo yum install httpd -y
+    
+    # Install MySQL
+    sudo yum install mysql-server -y
+    
+    # Install PHP 8.1
+    sudo yum install php php-cli php-fpm php-mysqlnd php-curl \
+      php-json php-mbstring php-xml php-zip -y
+    
+    # Start services
+    sudo systemctl start httpd mysql
+    sudo systemctl enable httpd mysql
+    ```
+  </Tab>
+</Tabs>
+
+### Step 2: Clone Repository
+
+```bash
+# Navigate to web root
+cd /var/www/html
+
+# Clone repository
+sudo git clone <repository-url> whatsapp-bot
+cd whatsapp-bot
+
+# Set ownership
+sudo chown -R www-data:www-data .
+
+# Set permissions
+sudo find . -type f -exec chmod 644 {} \;
+sudo find . -type d -exec chmod 755 {} \;
+sudo chmod 755 logs uploads
+```
+
+### Step 3: Install Composer Dependencies
+
+```bash
+# Install Composer if not already installed
+curl -sS https://getcomposer.org/installer | php
+sudo mv composer.phar /usr/local/bin/composer
+
+# Install project dependencies
+composer install --no-dev --optimize-autoloader
+```
+
+### Step 4: Database Setup
+
+```bash
+# Secure MySQL installation
+sudo mysql_secure_installation
+
+# Create database and user
+sudo mysql -u root -p <<EOF
+CREATE DATABASE whatsapp_rag_bot CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'botuser'@'localhost' IDENTIFIED BY 'secure_password_here';
+GRANT ALL PRIVILEGES ON whatsapp_rag_bot.* TO 'botuser'@'localhost';
+FLUSH PRIVILEGES;
+EOF
+
+# Import schema
+mysql -u root -p whatsapp_rag_bot < database/schema.sql
+```
+
+### Step 5: Configure Virtual Host
+
+```apache /etc/apache2/sites-available/whatsapp-bot.conf
+<VirtualHost *:80>
+    ServerName bot.yourdomain.com
+    DocumentRoot /var/www/html/whatsapp-bot
+    
+    <Directory /var/www/html/whatsapp-bot>
+        Options -Indexes +FollowSymLinks
+        AllowOverride All
+        Require all granted
+    </Directory>
+    
+    # Logs
+    ErrorLog ${APACHE_LOG_DIR}/whatsapp-bot-error.log
+    CustomLog ${APACHE_LOG_DIR}/whatsapp-bot-access.log combined
+    
+    # Security
+    <Files ".env">
+        Require all denied
+    </Files>
+</VirtualHost>
+```
+
+Enable site and SSL:
+
+```bash
+# Enable site
+sudo a2ensite whatsapp-bot.conf
+sudo systemctl reload apache2
+
+# Install Certbot for SSL
+sudo apt install certbot python3-certbot-apache -y
+
+# Obtain SSL certificate
+sudo certbot --apache -d bot.yourdomain.com
+```
+
+### Step 6: Configure Environment
+
+Create `.env` file with proper security:
+
+```bash
+# Create .env
+cp .env.example .env
+nano .env
+
+# Set restrictive permissions
+chmod 600 .env
+chown www-data:www-data .env
+```
+
+## Local Development Installation
+
+### Using PHP Built-in Server
+
+For quick local testing:
+
+```bash
+# Clone repository
+git clone <repository-url> whatsapp-bot
+cd whatsapp-bot
+
+# Install dependencies
+composer install
+
+# Create .env
+cp .env.example .env
+# Edit .env with your local MySQL credentials
+
+# Import database
+mysql -u root -p whatsapp_rag_bot < database/schema.sql
+
+# Start PHP server
+php -S localhost:8000
+```
+
+Access at: `http://localhost:8000`
+
+<Note>
+  The PHP built-in server is for **development only**. Do not use in production!
+</Note>
+
+### Using Docker (Optional)
+
+```yaml docker-compose.yml
+version: '3.8'
+
+services:
+  web:
+    image: php:8.1-apache
+    ports:
+      - "8080:80"
+    volumes:
+      - ./:/var/www/html
+    depends_on:
+      - db
+    environment:
+      DB_HOST: db
+      DB_NAME: whatsapp_rag_bot
+      DB_USER: root
+      DB_PASSWORD: rootpassword
+  
+  db:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: whatsapp_rag_bot
+    volumes:
+      - ./database/schema.sql:/docker-entrypoint-initdb.d/schema.sql
+      - mysql_data:/var/lib/mysql
+
+volumes:
+  mysql_data:
+```
+
+Run with:
+```bash
+docker-compose up -d
+```
+
+## Configuration Reference
+
+### Database Configuration
+
+From `config/config.php`:
+
+```php config/config.php
+return [
+    'database' => [
+        'host' => getenv('DB_HOST') ?: 'localhost',
+        'port' => getenv('DB_PORT') ?: 3306,
+        'name' => getenv('DB_NAME') ?: 'whatsapp_rag_bot',
+        'user' => getenv('DB_USER') ?: 'root',
+        'password' => getenv('DB_PASSWORD') ?: '',
+        'charset' => 'utf8mb4'
+    ],
+    // ...
+];
+```
+
+### RAG Configuration
+
+```php
+'rag' => [
+    'chunk_size' => 500,           // Characters per chunk
+    'chunk_overlap' => 50,          // Overlap between chunks
+    'top_k_results' => 3,           // Number of similar chunks to retrieve
+    'similarity_threshold' => 0.7,  // Minimum similarity score (0-1)
+    'similarity_method' => 'cosine' // Vector comparison method
+],
+```
+
+### Upload Configuration
+
+```php
+'uploads' => [
+    'path' => __DIR__ . '/../uploads',
+    'max_size' => 10485760,              // 10MB
+    'allowed_types' => ['pdf', 'txt', 'docx']
+],
+```
+
+## Post-Installation Steps
+
+<Steps>
+  <Step title="Complete Onboarding Wizard">
+    Navigate to your installation URL and follow the setup wizard:
+    1. Enter WhatsApp credentials
+    2. Configure OpenAI API key
+    3. Set bot personality and system prompt
+    4. (Optional) Configure Google Calendar
+    5. Test webhook connection
+  </Step>
+  
+  <Step title="Upload Knowledge Documents">
+    Go to **Documents** section and upload your first PDF, DOCX, or TXT files
+  </Step>
+  
+  <Step title="Configure Settings">
+    Review **Settings** page:
+    - Bot name and greeting message
+    - Confidence threshold
+    - Context message count (conversation memory)
+    - Auto-reply settings
+  </Step>
+  
+  <Step title="Set Up Monitoring">
+    Configure log monitoring and alerts:
+    ```bash
+    # Monitor webhook logs
+    tail -f logs/app.log
+    
+    # Set up log rotation
+    sudo nano /etc/logrotate.d/whatsapp-bot
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+### Common Issues
+
+<AccordionGroup>
+  <Accordion title="500 Internal Server Error">
+    **Causes:**
+    - `.htaccess` syntax error
+    - PHP version incompatibility
+    - Missing file permissions
+    
+    **Check Apache error log:**
+    ```bash
+    sudo tail -f /var/log/apache2/error.log
+    ```
+    
+    **Verify PHP version:**
+    ```bash
+    php -v  # Should be 7.4+
+    ```
+  </Accordion>
+  
+  <Accordion title="Database Connection Failed">
+    **Test connection manually:**
+    ```php
+    <?php
+    $conn = new mysqli('localhost', 'user', 'pass', 'dbname');
+    if ($conn->connect_error) {
+        die("Failed: " . $conn->connect_error);
+    }
+    echo "Connected successfully";
+    ```
+    
+    **Common issues:**
+    - Wrong credentials in `.env`
+    - MySQL service not running: `sudo systemctl start mysql`
+    - User doesn't have privileges: `GRANT ALL PRIVILEGES...`
+  </Accordion>
+  
+  <Accordion title="Composer Install Fails">
+    **Out of memory:**
+    ```bash
+    # Increase PHP memory limit temporarily
+    php -d memory_limit=512M /usr/local/bin/composer install
+    ```
+    
+    **SSL errors:**
+    ```bash
+    # Disable SSL verification (not recommended for production)
+    composer config -g -- disable-tls true
+    composer config -g -- secure-http false
+    ```
+  </Accordion>
+  
+  <Accordion title="Permission Denied Errors">
+    ```bash
+    # Fix ownership
+    sudo chown -R www-data:www-data /var/www/html/whatsapp-bot
+    
+    # Fix permissions
+    sudo find . -type f -exec chmod 644 {} \;
+    sudo find . -type d -exec chmod 755 {} \;
+    sudo chmod 755 logs uploads
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Security Hardening
+
+<Warning>
+  **Before going live, implement these security measures:**
+</Warning>
+
+<Steps>
+  <Step title="Secure .env File">
+    ```bash
+    chmod 600 .env
+    chown www-data:www-data .env
+    ```
+    
+    Verify `.htaccess` blocks access:
+    ```apache
+    <Files ".env">
+        Require all denied
+    </Files>
+    ```
+  </Step>
+  
+  <Step title="Enable Webhook Signature Validation">
+    In `webhook.php`, signature validation is already implemented:
+    ```php
+    $signature = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
+    $expected = 'sha256=' . hash_hmac('sha256', $rawBody, $appSecret);
+    if (!hash_equals($expected, $signature)) {
+        http_response_code(401);
+        exit('Unauthorized');
+    }
+    ```
+    
+    Ensure `WHATSAPP_APP_SECRET` is set in `.env`
+  </Step>
+  
+  <Step title="Set Proper File Permissions">
+    ```bash
+    # Remove write access from PHP files
+    find . -name "*.php" -exec chmod 644 {} \;
+    
+    # Protect config directory
+    chmod 755 config/
+    chmod 644 config/*.php
+    ```
+  </Step>
+  
+  <Step title="Disable Debug Mode">
+    ```bash .env
+    APP_DEBUG=false
+    ```
+  </Step>
+  
+  <Step title="Set Up Firewall">
+    ```bash
+    # Allow only HTTP/HTTPS
+    sudo ufw allow 80/tcp
+    sudo ufw allow 443/tcp
+    sudo ufw enable
+    ```
+  </Step>
+</Steps>
+
+## Next Steps
+
+Your WhatsApp RAG Bot is now installed! Continue with:
+
+<CardGroup cols={2}>
+  <Card title="Configuration" icon="gear" href="/configuration/credentials">
+    Configure bot settings, credentials, and system prompts
+  </Card>
+  
+  <Card title="Document Management" icon="file" href="/api/documents/upload">
+    Upload and manage your knowledge base documents
+  </Card>
+  
+  <Card title="Webhook Setup" icon="webhook" href="/configuration/whatsapp-setup">
+    Complete Meta Developer Console webhook configuration
+  </Card>
+  
+  <Card title="Testing" icon="vial" href="/deployment/troubleshooting">
+    Test your bot and verify all functionality works
+  </Card>
+</CardGroup>

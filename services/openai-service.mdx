@@ -1,0 +1,681 @@
+---
+title: OpenAI Service
+description: Interface for OpenAI API including chat completions, embeddings, and Whisper transcription
+icon: openai
+---
+
+## Overview
+
+The `OpenAIService` provides a unified interface for all OpenAI API interactions including chat completions, embeddings generation, function calling with tools, and audio transcription via Whisper.
+
+## Class Structure
+
+### Constructor
+
+```php
+public function __construct(
+    $apiKey,
+    $model,
+    $embeddingModel,
+    Logger $logger
+)
+```
+
+<ParamField path="apiKey" type="string" required>
+  OpenAI API key for authentication
+</ParamField>
+
+<ParamField path="model" type="string" required>
+  Chat completion model (e.g., `gpt-4o`, `gpt-4o-mini`)
+</ParamField>
+
+<ParamField path="embeddingModel" type="string" required>
+  Embedding model (e.g., `text-embedding-3-small`, `text-embedding-ada-002`)
+</ParamField>
+
+<ParamField path="logger" type="Logger" required>
+  Logger instance for tracking API calls and errors
+</ParamField>
+
+### Instantiation Example
+
+```php webhook.php
+if ($credentialService && $credentialService->hasOpenAICredentials()) {
+    $oaiCreds = $credentialService->getOpenAICredentials();
+    $openai = new OpenAIService(
+        $oaiCreds['api_key'],
+        $oaiCreds['model'],
+        $oaiCreds['embedding_model'],
+        $logger
+    );
+    $openaiTemperature = $oaiCreds['temperature'] ?? 0.7;
+    $openaiMaxTokens = $oaiCreds['max_tokens'] ?? 500;
+} else {
+    $openai = new OpenAIService(
+        Config::get('openai.api_key'),
+        Config::get('openai.model'),
+        Config::get('openai.embedding_model'),
+        $logger
+    );
+}
+```
+
+## Embeddings Methods
+
+### createEmbedding()
+
+Generates a vector embedding for a single text input.
+
+```php
+public function createEmbedding($text)
+```
+
+<ParamField path="text" type="string" required>
+  Text to convert into embedding vector
+</ParamField>
+
+**Returns:** Array of floats (typically 1536 dimensions for `text-embedding-3-small`)
+
+#### Implementation
+
+```php
+try {
+    $response = $this->client->post('embeddings', [
+        'json' => [
+            'model' => $this->embeddingModel,
+            'input' => $text
+        ]
+    ]);
+
+    $data = json_decode($response->getBody()->getContents(), true);
+    
+    if (isset($data['data'][0]['embedding'])) {
+        return $data['data'][0]['embedding'];
+    }
+
+    throw new \RuntimeException('Invalid embedding response');
+} catch (\GuzzleHttp\Exception\ClientException $e) {
+    $response = $e->getResponse();
+    $body = json_decode($response->getBody()->getContents(), true);
+    
+    if ($response->getStatusCode() === 429 || 
+        (isset($body['error']['code']) && $body['error']['code'] === 'insufficient_quota')) {
+        throw new \RuntimeException('INSUFFICIENT_FUNDS');
+    }
+    
+    throw $e;
+}
+```
+
+#### Usage Example
+
+```php
+$userQuery = "How do I reset my password?";
+$embedding = $openai->createEmbedding($userQuery);
+// Returns: [0.0234, -0.0156, 0.0891, ... ] (1536 values)
+```
+
+### createBatchEmbeddings()
+
+Generates embeddings for multiple texts, handling errors gracefully.
+
+```php
+public function createBatchEmbeddings(array $texts)
+```
+
+<ParamField path="texts" type="array" required>
+  Array of text strings to embed
+</ParamField>
+
+**Returns:** Array of embeddings (null for failed items)
+
+```php
+public function createBatchEmbeddings(array $texts)
+{
+    $embeddings = [];
+    
+    foreach ($texts as $index => $text) {
+        try {
+            $embeddings[$index] = $this->createEmbedding($text);
+        } catch (\Exception $e) {
+            $this->logger->error('Batch embedding error for index ' . $index);
+            $embeddings[$index] = null;
+        }
+    }
+
+    return $embeddings;
+}
+```
+
+<Note>
+This method processes texts sequentially. For better performance with large batches, consider OpenAI's native batch embedding endpoint.
+</Note>
+
+## Chat Completion Methods
+
+### generateResponse()
+
+Generates a chat completion with optional context and conversation history.
+
+```php
+public function generateResponse(
+    $prompt,
+    $context = '',
+    $systemPrompt = null,
+    $temperature = 0.7,
+    $maxTokens = 500,
+    $conversationHistory = [],
+    $modelOverride = null
+)
+```
+
+<ParamField path="prompt" type="string" required>
+  User's message or query
+</ParamField>
+
+<ParamField path="context" type="string" default="''">
+  Additional context (e.g., from RAG retrieval)
+</ParamField>
+
+<ParamField path="systemPrompt" type="string" default="null">
+  Custom system prompt (defaults to Spanish assistant prompt)
+</ParamField>
+
+<ParamField path="temperature" type="float" default="0.7">
+  Sampling temperature (0.0-2.0)
+</ParamField>
+
+<ParamField path="maxTokens" type="int" default="500">
+  Maximum tokens in response
+</ParamField>
+
+<ParamField path="conversationHistory" type="array" default="[]">
+  Previous messages for context
+</ParamField>
+
+<ParamField path="modelOverride" type="string" default="null">
+  Override the default model for this request
+</ParamField>
+
+**Returns:** String containing the AI's response
+
+#### Message Construction
+
+```php
+$systemMessage = $systemPrompt ?? 
+    'Eres un asistente virtual útil y amigable. ' .
+    'Responde de manera clara y concisa basándote en el contexto proporcionado.';
+
+$messages = [
+    ['role' => 'system', 'content' => $systemMessage]
+];
+
+if (!empty($context)) {
+    $messages[] = [
+        'role' => 'system',
+        'content' => "Contexto relevante:\n" . $context
+    ];
+}
+
+if (!empty($conversationHistory)) {
+    foreach ($conversationHistory as $historyMsg) {
+        $role = $historyMsg['sender'] === 'bot' ? 'assistant' : 'user';
+        $messages[] = [
+            'role' => $role,
+            'content' => $historyMsg['message_text']
+        ];
+    }
+}
+
+$messages[] = ['role' => 'user', 'content' => $prompt];
+```
+
+#### Usage Example
+
+```php webhook.php
+// With RAG context
+$response = $openai->generateResponse(
+    $userMessage,
+    $context,
+    $systemPrompt,
+    $temperature,
+    $maxTokens,
+    $conversationHistory
+);
+
+// Fallback without context
+$fallbackResponse = $openai->generateResponse(
+    $messageData['text'],
+    '',
+    $systemPrompt,
+    $openaiTemperature,
+    $openaiMaxTokens,
+    $conversationHistory
+);
+```
+
+### generateResponseWithTools()
+
+Generates a chat completion with OpenAI function calling capabilities.
+
+```php
+public function generateResponseWithTools(
+    $prompt,
+    $context = '',
+    $systemPrompt = null,
+    array $tools = [],
+    $temperature = 0.7,
+    $maxTokens = 500,
+    $conversationHistory = []
+)
+```
+
+<ParamField path="tools" type="array" required>
+  Array of function definitions in OpenAI tools format
+</ParamField>
+
+**Returns:** Array containing the full message object (may include `tool_calls`)
+
+#### Implementation
+
+```php
+$requestBody = [
+    'model' => $this->model,
+    'messages' => $messages,
+    'temperature' => $temperature,
+    'max_tokens' => $maxTokens
+];
+
+if (!empty($tools)) {
+    $requestBody['tools'] = $tools;
+    $requestBody['tool_choice'] = 'auto';
+}
+
+$response = $this->client->post('chat/completions', [
+    'json' => $requestBody
+]);
+
+$data = json_decode($response->getBody()->getContents(), true);
+
+if (isset($data['choices'][0]['message'])) {
+    return $data['choices'][0]['message'];
+}
+```
+
+#### Usage with Calendar Tools
+
+```php
+$tools = $openai->getCalendarTools();
+$message = $openai->generateResponseWithTools(
+    $userMessage,
+    $context,
+    $systemPrompt,
+    $tools,
+    0.7,
+    500,
+    $conversationHistory
+);
+
+if (isset($message['tool_calls'])) {
+    foreach ($message['tool_calls'] as $toolCall) {
+        $functionName = $toolCall['function']['name'];
+        $arguments = json_decode($toolCall['function']['arguments'], true);
+        
+        // Handle: schedule_appointment, check_availability, etc.
+    }
+}
+```
+
+## Calendar Tools
+
+### getCalendarTools()
+
+Returns predefined function definitions for calendar operations.
+
+```php
+public function getCalendarTools()
+```
+
+**Returns:** Array of tool definitions
+
+<Tabs>
+  <Tab title="schedule_appointment">
+    ```json
+    {
+      "type": "function",
+      "function": {
+        "name": "schedule_appointment",
+        "description": "El usuario quiere agendar, reservar, programar o sacar una cita...",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "date_preference": {
+              "type": "string",
+              "description": "Fecha o referencia temporal mencionada"
+            },
+            "time_preference": {
+              "type": "string",
+              "description": "Hora o rango preferido"
+            },
+            "service_type": {
+              "type": "string",
+              "description": "Tipo de servicio"
+            },
+            "is_confirmed": {
+              "type": "boolean",
+              "description": "true solo si confirmó explícitamente"
+            }
+          },
+          "required": ["is_confirmed"]
+        }
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="list_appointments">
+    ```json
+    {
+      "type": "function",
+      "function": {
+        "name": "list_appointments",
+        "description": "El usuario quiere consultar, ver o saber sus citas próximas",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "required": []
+        }
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="reschedule_appointment">
+    ```json
+    {
+      "type": "function",
+      "function": {
+        "name": "reschedule_appointment",
+        "description": "El usuario quiere reagendar, mover o cambiar una cita",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "description": "Motivo del reagendamiento"
+            }
+          },
+          "required": []
+        }
+      }
+    }
+    ```
+  </Tab>
+  
+  <Tab title="cancel_appointment">
+    ```json
+    {
+      "type": "function",
+      "function": {
+        "name": "cancel_appointment",
+        "description": "El usuario quiere cancelar definitivamente una cita",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "description": "Motivo de cancelación"
+            }
+          },
+          "required": []
+        }
+      }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Audio Transcription
+
+### transcribeAudio()
+
+Transcribes audio files using OpenAI's Whisper model.
+
+```php
+public function transcribeAudio($audioContent, $filename = 'audio.ogg')
+```
+
+<ParamField path="audioContent" type="string" required>
+  Binary audio file content
+</ParamField>
+
+<ParamField path="filename" type="string" default="'audio.ogg'">
+  Filename for the audio (affects format detection)
+</ParamField>
+
+**Returns:** String containing transcribed text
+
+#### Implementation
+
+```php
+try {
+    $tempFile = sys_get_temp_dir() . '/' . uniqid() . '_' . $filename;
+    file_put_contents($tempFile, $audioContent);
+
+    $response = $this->client->post('audio/transcriptions', [
+        'headers' => [
+            'Authorization' => 'Bearer ' . $this->apiKey
+        ],
+        'multipart' => [
+            [
+                'name' => 'file',
+                'contents' => fopen($tempFile, 'r'),
+                'filename' => $filename
+            ],
+            [
+                'name' => 'model',
+                'contents' => 'whisper-1'
+            ],
+            [
+                'name' => 'language',
+                'contents' => 'es'
+            ]
+        ]
+    ]);
+
+    $data = json_decode($response->getBody()->getContents(), true);
+    unlink($tempFile);
+
+    if (isset($data['text'])) {
+        $this->logger->info('Whisper: Audio transcribed', [
+            'text_length' => strlen($data['text'])
+        ]);
+        return $data['text'];
+    }
+} catch (\Exception $e) {
+    $this->logger->error('Whisper Transcription Error: ' . $e->getMessage());
+    throw $e;
+}
+```
+
+#### Usage Example
+
+```php webhook.php
+if ($messageData['type'] === 'audio' && isset($messageData['audio_id'])) {
+    $audioContent = $whatsapp->downloadMedia($messageData['audio_id']);
+    
+    $transcription = $openai->transcribeAudio($audioContent, 'audio.ogg');
+    
+    $messageData['text'] = '[Audio] ' . $transcription;
+    $logger->info('Audio transcribed', ['text' => $transcription]);
+}
+```
+
+<Note>
+Whisper currently defaults to Spanish (`'es'`). Modify the `language` parameter for other languages.
+</Note>
+
+## Error Handling
+
+### Quota Exceeded Detection
+
+All methods detect and handle OpenAI quota/billing errors:
+
+```php
+catch (\GuzzleHttp\Exception\ClientException $e) {
+    $response = $e->getResponse();
+    $body = json_decode($response->getBody()->getContents(), true);
+    
+    if ($response->getStatusCode() === 429 || 
+        (isset($body['error']['code']) && 
+         $body['error']['code'] === 'insufficient_quota')) {
+        $this->logger->error('OpenAI Insufficient Funds');
+        throw new \RuntimeException('INSUFFICIENT_FUNDS');
+    }
+    
+    throw $e;
+}
+```
+
+### Webhook Handling
+
+```php webhook.php
+function handleInsufficientFunds($db, $e) {
+    if (strpos($e->getMessage(), 'INSUFFICIENT_FUNDS') !== false) {
+        $db->query(
+            "INSERT INTO settings (setting_key, setting_value) 
+             VALUES ('openai_status', 'insufficient_funds') 
+             ON DUPLICATE KEY UPDATE setting_value = 'insufficient_funds'",
+            []
+        );
+        $db->query(
+            "INSERT INTO settings (setting_key, setting_value) 
+             VALUES ('openai_error_timestamp', NOW()) 
+             ON DUPLICATE KEY UPDATE setting_value = NOW()",
+            []
+        );
+        return true;
+    }
+    return false;
+}
+
+try {
+    $result = $rag->generateResponse(...);
+} catch (\Exception $e) {
+    handleInsufficientFunds($db, $e);
+    $logger->error('RAG Error: ' . $e->getMessage());
+}
+```
+
+## HTTP Client Configuration
+
+The service uses GuzzleHTTP with custom configuration:
+
+```php
+$this->client = new Client([
+    'base_uri' => 'https://api.openai.com/v1/',
+    'headers' => [
+        'Authorization' => 'Bearer ' . $this->apiKey,
+        'Content-Type' => 'application/json'
+    ],
+    'timeout' => 30,
+    'verify' => false  // SSL verification disabled
+]);
+```
+
+<Warning>
+SSL verification is disabled (`'verify' => false`). Enable it in production for better security:
+
+```php
+'verify' => true
+```
+</Warning>
+
+## Configuration
+
+Configure OpenAI settings in `config/config.php`:
+
+```php config/config.php
+return [
+    'openai' => [
+        'api_key' => env('OPENAI_API_KEY'),
+        'model' => env('OPENAI_MODEL', 'gpt-4o-mini'),
+        'embedding_model' => env('OPENAI_EMBEDDING_MODEL', 'text-embedding-3-small'),
+        'temperature' => 0.7,
+        'max_tokens' => 500
+    ]
+];
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Choose the Right Model">
+    - **gpt-4o**: Best quality, slower, more expensive
+    - **gpt-4o-mini**: Balanced performance and cost (recommended)
+    - **gpt-3.5-turbo**: Fastest and cheapest, lower quality
+  </Accordion>
+  
+  <Accordion title="Optimize Token Usage">
+    ```php
+    // Adjust maxTokens based on response type
+    $shortAnswer = 150;  // For quick replies
+    $mediumAnswer = 500; // Default
+    $longAnswer = 1000;  // For detailed explanations
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle Rate Limits">
+    Implement exponential backoff for rate limit errors (429):
+    
+    ```php
+    $retries = 0;
+    while ($retries < 3) {
+        try {
+            return $openai->createEmbedding($text);
+        } catch (\Exception $e) {
+            if (strpos($e->getMessage(), '429') !== false) {
+                sleep(pow(2, $retries));
+                $retries++;
+            } else {
+                throw $e;
+            }
+        }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Use System Prompts Effectively">
+    Provide clear instructions in system prompts:
+    
+    ```php
+    $systemPrompt = 
+        "You are a helpful customer service assistant. " .
+        "Always respond in Spanish. " .
+        "Base your answers on the provided context. " .
+        "If you don't know the answer, say so politely.";
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related Services
+
+<CardGroup cols={2}>
+  <Card title="RAG Service" icon="brain" href="/services/rag-service">
+    Uses OpenAI for embeddings and response generation
+  </Card>
+  <Card title="Vector Search" icon="magnifying-glass" href="/services/vector-search">
+    Stores and searches embeddings created by OpenAI
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Calendar Integration" icon="calendar" href="/features/calendar-integration">
+    Learn about function calling with calendar tools
+  </Card>
+  <Card title="Audio Messages" icon="microphone" href="/features/ai-conversations">
+    Configure Whisper transcription
+  </Card>
+</CardGroup>

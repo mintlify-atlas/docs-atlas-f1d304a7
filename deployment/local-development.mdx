@@ -1,0 +1,478 @@
+---
+title: Local Development Setup
+description: Step-by-step guide to run the WhatsApp RAG Bot on your local machine
+---
+
+## Overview
+
+This guide walks you through setting up the WhatsApp RAG Bot for local development. You'll use PHP's built-in server and ngrok for webhook testing.
+
+## Prerequisites
+
+Before starting, ensure you have:
+
+<CardGroup cols={2}>
+  <Card title="PHP 7.4+" icon="php">
+    With required extensions installed
+  </Card>
+  <Card title="Composer" icon="box">
+    For dependency management
+  </Card>
+  <Card title="MySQL 5.7+" icon="database">
+    Or MariaDB 10.2+
+  </Card>
+  <Card title="ngrok" icon="globe">
+    For webhook testing (optional)
+  </Card>
+</CardGroup>
+
+## Installation Steps
+
+### Step 1: Clone the Repository
+
+```bash
+# Clone the project
+git clone <repository-url> whatsapp-rag-bot
+cd whatsapp-rag-bot
+```
+
+### Step 2: Install Dependencies
+
+<Steps>
+  <Step title="Install Composer packages">
+    ```bash
+    composer install
+    ```
+    
+    This installs:
+    - `guzzlehttp/guzzle` - HTTP client
+    - `phpoffice/phpword` - DOCX processing
+    - `smalot/pdfparser` - PDF processing
+    - PSR interfaces and dependencies
+  </Step>
+  
+  <Step title="Verify installation">
+    ```bash
+    # Check if vendor directory exists
+    ls -la vendor/autoload.php
+    
+    # Verify PHP can load autoloader
+    php -r "require 'vendor/autoload.php'; echo 'OK';">
+    ```
+  </Step>
+</Steps>
+
+### Step 3: Database Setup
+
+<Steps>
+  <Step title="Create the database">
+    ```bash
+    # Connect to MySQL
+    mysql -u root -p
+    ```
+    
+    ```sql
+    -- Create database
+    CREATE DATABASE whatsapp_rag_bot 
+      DEFAULT CHARACTER SET utf8mb4 
+      COLLATE utf8mb4_unicode_ci;
+    
+    -- Create user (optional)
+    CREATE USER 'whatsapp_user'@'localhost' IDENTIFIED BY 'your_password';
+    GRANT ALL PRIVILEGES ON whatsapp_rag_bot.* TO 'whatsapp_user'@'localhost';
+    FLUSH PRIVILEGES;
+    
+    EXIT;
+    ```
+  </Step>
+  
+  <Step title="Import the schema">
+    ```bash
+    # Import database schema
+    mysql -u root -p whatsapp_rag_bot < database/schema.sql
+    ```
+    
+    <Accordion title="What does schema.sql create?">
+    The schema includes:
+    - `documents` - Uploaded files for RAG
+    - `vectors` - Embeddings for semantic search
+    - `conversations` - Chat sessions
+    - `messages` - Message history
+    - `settings` - Bot configuration
+    - `bot_credentials` - API credentials (encrypted)
+    - `flow_nodes` - Classic bot flows
+    - `calendar_flow_state` - Calendar booking sessions
+    - And more...
+    </Accordion>
+  </Step>
+  
+  <Step title="Verify database">
+    ```bash
+    # Check tables were created
+    mysql -u root -p whatsapp_rag_bot -e "SHOW TABLES;"
+    ```
+    
+    You should see 15+ tables listed.
+  </Step>
+</Steps>
+
+### Step 4: Environment Configuration
+
+<Steps>
+  <Step title="Create .env file">
+    Create a `.env` file in the project root:
+    
+    ```bash .env
+    # Database Configuration
+    DB_HOST=localhost
+    DB_PORT=3306
+    DB_NAME=whatsapp_rag_bot
+    DB_USER=root
+    DB_PASSWORD=your_password
+    
+    # WhatsApp Business API (get from Meta Developer Console)
+    WHATSAPP_ACCESS_TOKEN=your_access_token_here
+    WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
+    WHATSAPP_VERIFY_TOKEN=my_custom_verify_token_123
+    WHATSAPP_APP_SECRET=your_app_secret
+    
+    # OpenAI API
+    OPENAI_API_KEY=sk-...
+    OPENAI_MODEL=gpt-3.5-turbo
+    OPENAI_EMBEDDING_MODEL=text-embedding-ada-002
+    
+    # Application
+    APP_BASE_URL=http://localhost:8080
+    APP_TIMEZONE=America/Bogota
+    APP_DEBUG=true
+    ```
+  </Step>
+  
+  <Step title="Secure the .env file">
+    ```bash
+    # Set proper permissions
+    chmod 600 .env
+    ```
+    
+    <Warning>
+    Never commit `.env` to version control. Add it to `.gitignore`.
+    </Warning>
+  </Step>
+</Steps>
+
+### Step 5: Create Required Directories
+
+```bash
+# Create directories for logs and uploads
+mkdir -p logs
+mkdir -p uploads/audios
+
+# Set permissions
+chmod 755 logs uploads uploads/audios
+
+# Create .gitkeep files
+touch logs/.gitkeep
+touch uploads/.gitkeep
+```
+
+### Step 6: Start the Development Server
+
+<Note>
+The project includes `router.php` for use with PHP's built-in server during development.
+</Note>
+
+```bash
+# Start PHP built-in server on port 8080
+php -S localhost:8080 router.php
+```
+
+You should see:
+```
+PHP 7.4.x Development Server (http://localhost:8080) started
+```
+
+<Accordion title="What does router.php do?">
+From `router.php`:
+```php
+/**
+ * Router para PHP Built-in Server (solo desarrollo local)
+ * Uso: php -S localhost:8080 router.php
+ * 
+ * NO subir a producción - solo para desarrollo local
+ */
+```
+
+It serves static files directly and routes all other requests to `index.php`.
+</Accordion>
+
+### Step 7: Access the Admin Panel
+
+Open your browser and navigate to:
+
+```
+http://localhost:8080
+```
+
+You should see the admin panel login/dashboard.
+
+## Webhook Setup for Local Testing
+
+<Note>
+Meta requires a public HTTPS URL for webhooks. Use ngrok to expose your local server.
+</Note>
+
+### Install and Configure ngrok
+
+<Steps>
+  <Step title="Install ngrok">
+    Download from [ngrok.com](https://ngrok.com) or install via package manager:
+    
+    ```bash
+    # macOS
+    brew install ngrok
+    
+    # Linux
+    snap install ngrok
+    
+    # Windows
+    choco install ngrok
+    ```
+  </Step>
+  
+  <Step title="Start ngrok tunnel">
+    In a new terminal window:
+    
+    ```bash
+    ngrok http 8080
+    ```
+    
+    You'll see output like:
+    ```
+    Forwarding  https://abc123.ngrok.io -> http://localhost:8080
+    ```
+    
+    <Warning>
+    Keep this terminal window open. Closing it will stop the tunnel.
+    </Warning>
+  </Step>
+  
+  <Step title="Note your webhook URL">
+    Your webhook URL will be:
+    ```
+    https://abc123.ngrok.io/webhook
+    ```
+    
+    Copy this URL - you'll need it for Meta configuration.
+  </Step>
+</Steps>
+
+### Configure Meta Webhook
+
+<Steps>
+  <Step title="Open Meta Developer Console">
+    Go to [developers.facebook.com](https://developers.facebook.com) and open your WhatsApp app.
+  </Step>
+  
+  <Step title="Configure webhook">
+    Navigate to **WhatsApp > Configuration > Webhook**
+    
+    Set:
+    - **Callback URL**: `https://abc123.ngrok.io/webhook`
+    - **Verify Token**: Same as `WHATSAPP_VERIFY_TOKEN` in your `.env` file
+  </Step>
+  
+  <Step title="Subscribe to webhook fields">
+    Subscribe to:
+    - ✅ `messages`
+    - ✅ `message_status` (optional)
+  </Step>
+  
+  <Step title="Test verification">
+    Click **Verify and Save**. Meta will send a GET request to verify your webhook.
+    
+    Check your PHP server logs:
+    ```bash
+    # In your PHP server terminal, you should see:
+    [200]: GET /webhook?hub.mode=subscribe&hub.verify_token=...
+    ```
+  </Step>
+</Steps>
+
+## Testing the Bot
+
+### Send a Test Message
+
+<Steps>
+  <Step title="Send message from WhatsApp">
+    Use your personal WhatsApp to send a message to your bot's phone number.
+    
+    Example: "Hello, can you help me?"
+  </Step>
+  
+  <Step title="Check logs">
+    Monitor the PHP server terminal and check `logs/` directory:
+    
+    ```bash
+    # Watch logs in real-time
+    tail -f logs/$(date +%Y-%m-%d).log
+    ```
+  </Step>
+  
+  <Step title="Verify response">
+    You should receive a response from the bot based on your configured settings and available documents.
+  </Step>
+</Steps>
+
+### Test Webhook Locally
+
+<CodeGroup>
+```bash cURL
+# Test webhook verification (GET)
+curl "http://localhost:8080/webhook?hub.mode=subscribe&hub.verify_token=my_custom_verify_token_123&hub.challenge=test_challenge"
+
+# Should return: test_challenge
+```
+
+```bash Simulate Message
+# Simulate incoming message (POST)
+# Note: In real setup, this comes from Meta with proper signature
+curl -X POST http://localhost:8080/webhook \
+  -H "Content-Type: application/json" \
+  -d '{
+    "object": "whatsapp_business_account",
+    "entry": [{
+      "changes": [{
+        "value": {
+          "messages": [{
+            "from": "1234567890",
+            "id": "wamid.test123",
+            "text": {"body": "Hello bot"},
+            "type": "text"
+          }]
+        }
+      }]
+    }]
+  }'
+```
+</CodeGroup>
+
+## Development Tips
+
+### Hot Reload
+
+<Note>
+PHP's built-in server doesn't support auto-reload. Restart the server after code changes:
+</Note>
+
+```bash
+# Stop: Ctrl+C
+# Restart:
+php -S localhost:8080 router.php
+```
+
+### Debug Mode
+
+Enable detailed logging:
+
+```env .env
+APP_DEBUG=true
+```
+
+Check logs:
+```bash
+# View all logs
+ls -lh logs/
+
+# View today's log
+cat logs/$(date +%Y-%m-%d).log
+
+# Follow logs in real-time
+tail -f logs/$(date +%Y-%m-%d).log
+```
+
+### Database Inspection
+
+```bash
+# Connect to database
+mysql -u root -p whatsapp_rag_bot
+```
+
+```sql
+-- View recent messages
+SELECT * FROM messages ORDER BY created_at DESC LIMIT 10;
+
+-- View conversations
+SELECT * FROM conversations;
+
+-- View settings
+SELECT * FROM settings;
+
+-- View document count
+SELECT COUNT(*) FROM documents WHERE is_active = 1;
+```
+
+### Upload Test Documents
+
+1. Navigate to admin panel: `http://localhost:8080`
+2. Go to **Documents** section
+3. Upload PDF or DOCX files
+4. Bot will process them for RAG
+
+## Common Issues
+
+<AccordionGroup>
+  <Accordion title="Connection refused to MySQL">
+    **Problem**: Can't connect to database
+    
+    **Solution**:
+    ```bash
+    # Check MySQL is running
+    sudo systemctl status mysql
+    # or
+    mysqladmin ping
+    
+    # Verify credentials in .env match your MySQL setup
+    ```
+  </Accordion>
+  
+  <Accordion title="Webhook verification fails">
+    **Problem**: Meta can't verify webhook
+    
+    **Solution**:
+    - Ensure ngrok is running
+    - Verify token matches exactly (case-sensitive)
+    - Check PHP server is running
+    - Review webhook.php:84-103 for verification logic
+  </Accordion>
+  
+  <Accordion title="Autoloader not found">
+    **Problem**: `vendor/autoload.php` not found
+    
+    **Solution**:
+    ```bash
+    composer install
+    ```
+  </Accordion>
+  
+  <Accordion title="Permission denied on logs/">
+    **Problem**: Can't write to logs directory
+    
+    **Solution**:
+    ```bash
+    chmod 755 logs/
+    # or if running as different user:
+    sudo chown -R $USER:$USER logs/
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Production Deployment" icon="server" href="/deployment/production">
+    Deploy to production server
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/deployment/troubleshooting">
+    Common issues and solutions
+  </Card>
+</CardGroup>

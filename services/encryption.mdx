@@ -1,0 +1,350 @@
+---
+title: Encryption Service
+description: AES-256-CBC encryption service for securing sensitive credentials and API keys
+icon: lock
+---
+
+## Overview
+
+The `EncryptionService` provides symmetric encryption using AES-256-CBC to protect sensitive data like API keys, access tokens, and passwords stored in the database.
+
+<Note>
+All sensitive credentials in the `bot_credentials` and `google_oauth_credentials` tables are encrypted at rest using this service.
+</Note>
+
+## Configuration
+
+The encryption service requires a cipher key to be set in your environment configuration:
+
+```env .env
+APP_CIPHER_KEY=your-32-character-secret-key-here
+```
+
+<Warning>
+**Important Security Notes:**
+- The cipher key must be exactly 32 characters for AES-256
+- Never commit the cipher key to version control
+- Store the key securely and back it up separately from the database
+- If the key is lost, encrypted data cannot be recovered
+</Warning>
+
+## Initialization
+
+```php
+use App\Services\EncryptionService;
+
+// Initialize with environment key
+$encryption = new EncryptionService();
+
+// Or explicitly provide a key
+$encryption = new EncryptionService('my-secret-32-char-cipher-key!');
+```
+
+## Encrypting Data
+
+Encrypt sensitive strings before storing them in the database:
+
+```php
+$encryption = new EncryptionService();
+
+// Encrypt API credentials
+$whatsappToken = $encryption->encrypt('EAABsZC...');
+$openaiKey = $encryption->encrypt('sk-proj-...');
+$appSecret = $encryption->encrypt('secret123');
+
+// Store in database
+$db->update('bot_credentials', [
+    'whatsapp_access_token' => $whatsappToken,
+    'openai_api_key' => $openaiKey,
+    'whatsapp_app_secret' => $appSecret
+], 'id = 1');
+```
+
+### Encryption Process
+
+The encryption method:
+1. Generates a random initialization vector (IV)
+2. Encrypts the plaintext using AES-256-CBC
+3. Prepends the IV to the ciphertext
+4. Base64-encodes the result for safe storage
+
+<Note>
+Each encryption operation uses a unique IV, ensuring that encrypting the same value twice produces different ciphertext.
+</Note>
+
+## Decrypting Data
+
+Decrypt encrypted values when reading from the database:
+
+```php
+$encryption = new EncryptionService();
+
+// Retrieve encrypted credentials
+$creds = $db->fetchOne('SELECT * FROM bot_credentials WHERE id = 1');
+
+// Decrypt for use
+$whatsappToken = $encryption->decrypt($creds['whatsapp_access_token']);
+$openaiKey = $encryption->decrypt($creds['openai_api_key']);
+
+// Use decrypted values
+$whatsapp = new WhatsAppService($whatsappToken);
+```
+
+### Error Handling
+
+Decryption can fail if the data is corrupted or the wrong key is used:
+
+```php
+try {
+    $decrypted = $encryption->decrypt($encryptedValue);
+} catch (RuntimeException $e) {
+    // Handle decryption failure
+    if (str_contains($e->getMessage(), 'Decryption failed')) {
+        // Wrong key or corrupted data
+        $logger->error('Decryption failed - check cipher key');
+    } elseif (str_contains($e->getMessage(), 'Invalid encrypted data format')) {
+        // Data is not properly base64 encoded
+        $logger->error('Invalid encrypted data format');
+    }
+}
+```
+
+## Checking Encryption Status
+
+Verify if a value is encrypted before attempting decryption:
+
+```php
+$encryption = new EncryptionService();
+
+$value = 'EAABsZC...';
+
+if ($encryption->isEncrypted($value)) {
+    // Decrypt if needed
+    $value = $encryption->decrypt($value);
+}
+
+// Use the value
+echo $value;
+```
+
+<Note>
+The `isEncrypted()` method checks for valid base64 encoding and sufficient length. It cannot definitively verify that data was encrypted by this service.
+</Note>
+
+## Real-World Examples
+
+<CodeGroup>
+```php Encrypting WhatsApp Credentials
+use App\Services\EncryptionService;
+use App\Core\Database;
+
+// User submits credentials through admin panel
+$phoneNumberId = $_POST['phone_number_id'];
+$accessToken = $_POST['access_token'];
+$appSecret = $_POST['app_secret'];
+$verifyToken = $_POST['verify_token'];
+
+// Encrypt sensitive values
+$encryption = new EncryptionService();
+$encryptedToken = $encryption->encrypt($accessToken);
+$encryptedSecret = $encryption->encrypt($appSecret);
+
+// Store in database
+$db = Database::getInstance();
+$db->update('bot_credentials', [
+    'whatsapp_phone_number_id' => $phoneNumberId,
+    'whatsapp_access_token' => $encryptedToken,
+    'whatsapp_app_secret' => $encryptedSecret,
+    'whatsapp_verify_token' => $verifyToken // Not encrypted (public value)
+], 'id = 1');
+```
+
+```php Decrypting for API Calls
+use App\Services\EncryptionService;
+use App\Core\Database;
+use App\Services\WhatsAppService;
+
+// Load encrypted credentials
+$db = Database::getInstance();
+$creds = $db->fetchOne('SELECT * FROM bot_credentials WHERE id = 1');
+
+// Decrypt for use
+$encryption = new EncryptionService();
+$accessToken = $encryption->decrypt($creds['whatsapp_access_token']);
+$appSecret = $encryption->decrypt($creds['whatsapp_app_secret']);
+
+// Initialize WhatsApp service with decrypted credentials
+$whatsapp = new WhatsAppService(
+    $creds['whatsapp_phone_number_id'],
+    $accessToken,
+    $appSecret
+);
+
+// Send message
+$whatsapp->sendMessage('+1234567890', 'Hello!');
+```
+
+```php Google OAuth Token Encryption
+use App\Services\EncryptionService;
+use App\Core\Database;
+
+// After OAuth flow completes
+$accessToken = $oauthResponse['access_token'];
+$refreshToken = $oauthResponse['refresh_token'];
+$expiresIn = $oauthResponse['expires_in'];
+
+// Encrypt tokens
+$encryption = new EncryptionService();
+$encryptedAccess = $encryption->encrypt($accessToken);
+$encryptedRefresh = $encryption->encrypt($refreshToken);
+
+// Store encrypted tokens
+$db = Database::getInstance();
+$db->update('google_oauth_credentials', [
+    'access_token' => $encryptedAccess,
+    'refresh_token' => $encryptedRefresh,
+    'token_expires_at' => date('Y-m-d H:i:s', time() + $expiresIn)
+], 'id = 1');
+```
+
+```php Migration: Encrypting Existing Data
+use App\Services\EncryptionService;
+use App\Core\Database;
+
+// One-time migration script to encrypt plaintext credentials
+$db = Database::getInstance();
+$encryption = new EncryptionService();
+
+// Get all unencrypted credentials
+$creds = $db->fetchOne('SELECT * FROM bot_credentials WHERE id = 1');
+
+$db->beginTransaction();
+try {
+    // Check and encrypt each field
+    if (!$encryption->isEncrypted($creds['whatsapp_access_token'])) {
+        $encrypted = $encryption->encrypt($creds['whatsapp_access_token']);
+        $db->update('bot_credentials', 
+            ['whatsapp_access_token' => $encrypted], 
+            'id = 1'
+        );
+    }
+    
+    if (!$encryption->isEncrypted($creds['openai_api_key'])) {
+        $encrypted = $encryption->encrypt($creds['openai_api_key']);
+        $db->update('bot_credentials', 
+            ['openai_api_key' => $encrypted], 
+            'id = 1'
+        );
+    }
+    
+    $db->commit();
+    echo "Migration completed successfully\n";
+    
+} catch (Exception $e) {
+    $db->rollback();
+    echo "Migration failed: " . $e->getMessage() . "\n";
+}
+```
+</CodeGroup>
+
+## API Reference
+
+### `__construct(string $cipherKey = null)`
+
+Initializes the encryption service with a cipher key.
+
+**Location**: `src/Services/EncryptionService.php:10`
+
+**Parameters**:
+- `$cipherKey` (string, optional): 32-character encryption key. If not provided, reads from `APP_CIPHER_KEY` environment variable.
+
+**Throws**: `RuntimeException` if cipher key is not configured
+
+---
+
+### `encrypt(string $value): string`
+
+Encrypts a plaintext string using AES-256-CBC.
+
+**Location**: `src/Services/EncryptionService.php:19`
+
+**Parameters**:
+- `$value` (string): Plaintext to encrypt
+
+**Returns**: Base64-encoded ciphertext with IV prepended
+
+**Throws**: `RuntimeException` if encryption fails
+
+---
+
+### `decrypt(string $value): string`
+
+Decrypts an encrypted string.
+
+**Location**: `src/Services/EncryptionService.php:33`
+
+**Parameters**:
+- `$value` (string): Base64-encoded ciphertext (from `encrypt()` method)
+
+**Returns**: Decrypted plaintext
+
+**Throws**: 
+- `RuntimeException` if data format is invalid
+- `RuntimeException` if decryption fails (wrong key or corrupted data)
+
+---
+
+### `isEncrypted(string $value): bool`
+
+Checks if a string appears to be encrypted data.
+
+**Location**: `src/Services/EncryptionService.php:54`
+
+**Parameters**:
+- `$value` (string): String to check
+
+**Returns**: `true` if value appears to be encrypted, `false` otherwise
+
+<Warning>
+This method performs heuristic checking and may return false positives for base64-encoded data that wasn't encrypted by this service.
+</Warning>
+
+## Security Best Practices
+
+<Card title="Key Rotation" icon="key">
+Periodically rotate your cipher key. Re-encrypt all data with the new key and securely destroy the old key.
+</Card>
+
+<Card title="Secure Key Storage" icon="vault">
+Store the cipher key in a secure location separate from the application code and database backups.
+</Card>
+
+<Card title="Environment Isolation" icon="layer-group">
+Use different cipher keys for development, staging, and production environments.
+</Card>
+
+<Card title="Backup Strategy" icon="floppy-disk">
+Back up the cipher key securely. Without it, encrypted data in backups cannot be recovered.
+</Card>
+
+## Encryption Algorithm Details
+
+| Property | Value |
+|----------|-------|
+| Algorithm | AES-256-CBC |
+| Key Size | 256 bits (32 bytes) |
+| IV Size | 128 bits (16 bytes) |
+| Mode | Cipher Block Chaining (CBC) |
+| Padding | PKCS#7 |
+| Encoding | Base64 (for storage) |
+
+## Related Services
+
+<CardGroup cols={2}>
+  <Card title="Database" icon="database" href="/services/database">
+    Store encrypted credentials in the database
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration/system-settings">
+    Manage encryption keys and settings
+  </Card>
+</CardGroup>

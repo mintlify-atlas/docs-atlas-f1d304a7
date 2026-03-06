@@ -1,0 +1,287 @@
+---
+title: System Requirements
+description: Technical requirements for running the WhatsApp RAG Bot
+---
+
+## Overview
+
+Before deploying the WhatsApp RAG Bot, ensure your environment meets the following requirements. This project is built with PHP and requires several dependencies and extensions.
+
+## Server Requirements
+
+### PHP Version
+
+<Note>
+PHP 7.4 or higher is required. The application is compatible with PHP 8.0+.
+</Note>
+
+From `composer.json`:
+```json
+"require": {
+    "php": "^7.4 || ^8.0"
+}
+```
+
+### PHP Extensions
+
+The following PHP extensions are required:
+
+<Steps>
+  <Step title="Core Extensions">
+    - `curl` - For API calls to WhatsApp and OpenAI
+    - `json` - For JSON encoding/decoding
+    - `pdo_mysql` - For MySQL database connections
+    - `mbstring` - For multi-byte string handling
+    - `openssl` - For encryption and secure connections
+  </Step>
+  
+  <Step title="File Processing Extensions">
+    - `zip` - For handling ZIP archives
+    - `xml` - For processing DOCX files
+    - `gd` or `imagick` - For image processing (optional)
+  </Step>
+  
+  <Step title="Additional Extensions">
+    - `fileinfo` - For file type detection
+    - `iconv` - For character encoding conversion
+  </Step>
+</Steps>
+
+### Web Server
+
+<Tabs>
+  <Tab title="Apache">
+    - Apache 2.4 or higher
+    - `mod_rewrite` enabled
+    - `.htaccess` support enabled
+    - `mod_headers` recommended (for security headers)
+  </Tab>
+  
+  <Tab title="Nginx">
+    - Nginx 1.18 or higher
+    - PHP-FPM configured
+    - URL rewriting configured
+  </Tab>
+  
+  <Tab title="Built-in Server (Development Only)">
+    - PHP built-in server (via `router.php`)
+    - **Not recommended for production**
+  </Tab>
+</Tabs>
+
+## Database Requirements
+
+### MySQL
+
+<Warning>
+MySQL 5.7+ or MariaDB 10.2+ is required with InnoDB storage engine.
+</Warning>
+
+Required MySQL features:
+- InnoDB storage engine
+- UTF-8 (utf8mb4) character set support
+- BLOB field support for vector embeddings
+- JSON field support (for flow_nodes, calendar_settings)
+- Foreign key constraints
+- Triggers support
+
+### Database Configuration
+
+Recommended MySQL settings:
+```sql
+max_allowed_packet = 64M
+innodb_buffer_pool_size = 256M
+character_set_server = utf8mb4
+collation_server = utf8mb4_unicode_ci
+```
+
+## Composer Dependencies
+
+The following PHP packages are required (installed via Composer):
+
+### HTTP Client
+```json
+"guzzlehttp/guzzle": "^7.0"
+```
+Used for making HTTP requests to WhatsApp Business API and OpenAI API.
+
+### Document Processing
+
+<Accordion title="PHPWord - DOCX Processing">
+```json
+"phpoffice/phpword": "^0.18"
+```
+For reading and extracting text from Microsoft Word documents (.docx).
+</Accordion>
+
+<Accordion title="PDFParser - PDF Processing">
+```json
+"smalot/pdfparser": "^0.18"
+```
+For reading and extracting text from PDF documents for RAG processing.
+</Accordion>
+
+## External API Requirements
+
+### WhatsApp Business API
+
+<Steps>
+  <Step title="Meta Developer Account">
+    - Active Meta Developer account
+    - WhatsApp Business App created
+    - Phone number registered for WhatsApp Business
+  </Step>
+  
+  <Step title="Required Credentials">
+    - Phone Number ID
+    - Access Token
+    - Verify Token (custom string you define)
+    - App Secret (for webhook signature verification)
+  </Step>
+  
+  <Step title="Webhook Configuration">
+    - Public HTTPS URL for webhook endpoint
+    - SSL certificate (required by Meta)
+  </Step>
+</Steps>
+
+### OpenAI API
+
+<Note>
+An active OpenAI API key with sufficient credits is required.
+</Note>
+
+Required API access:
+- GPT models (e.g., `gpt-3.5-turbo`, `gpt-4`)
+- Embeddings models (e.g., `text-embedding-ada-002`)
+- Whisper API (for audio transcription)
+
+### Google Calendar (Optional)
+
+If using calendar scheduling features:
+- Google Cloud Project
+- Calendar API enabled
+- OAuth 2.0 credentials configured
+
+## File System Requirements
+
+### Directory Permissions
+
+<CodeGroup>
+```bash chmod
+# Required writable directories
+chmod 755 logs/
+chmod 755 uploads/
+chmod 755 uploads/audios/
+
+# Protected files
+chmod 600 .env
+chmod 644 .htaccess
+```
+
+```bash ownership
+# Set correct ownership (replace www-data with your web server user)
+chown -R www-data:www-data logs/
+chown -R www-data:www-data uploads/
+```
+</CodeGroup>
+
+### Disk Space
+
+- **Minimum**: 100 MB for application files
+- **Recommended**: 1 GB+ for logs, uploaded documents, and audio files
+- Vector embeddings stored as BLOBs in MySQL (ensure adequate database storage)
+
+## PHP Configuration
+
+### Required php.ini Settings
+
+```ini
+; File uploads
+upload_max_filesize = 10M
+post_max_size = 10M
+file_uploads = On
+
+; Execution limits
+max_execution_time = 60
+max_input_time = 60
+memory_limit = 512M
+
+; Error handling
+error_reporting = E_ALL
+display_errors = Off
+log_errors = On
+
+; Timezone
+date.timezone = America/Bogota
+```
+
+<Warning>
+In production, always set `display_errors = Off` and `log_errors = On` for security.
+</Warning>
+
+## Network Requirements
+
+### Outbound Connections
+
+The server must be able to make HTTPS requests to:
+- `graph.facebook.com` (WhatsApp API)
+- `api.openai.com` (OpenAI API)
+- `www.googleapis.com` (Google Calendar API, if enabled)
+
+### Inbound Connections
+
+- **Port 443** (HTTPS) must be open for webhook callbacks
+- Valid SSL/TLS certificate required (Meta requirement)
+
+## Development vs Production
+
+<Tabs>
+  <Tab title="Development">
+    ### Minimal Requirements
+    - PHP 7.4+ with built-in server
+    - MySQL 5.7+ (or SQLite for testing)
+    - ngrok or similar for webhook testing
+    - Composer installed
+    
+    ### Not Required
+    - SSL certificate (can use ngrok HTTPS)
+    - Apache/Nginx (built-in server works)
+    - Production-level performance
+  </Tab>
+  
+  <Tab title="Production">
+    ### Full Requirements
+    - Apache/Nginx with SSL
+    - MySQL 5.7+ with optimized configuration
+    - Valid SSL certificate
+    - PHP-FPM (recommended)
+    - Process supervisor (optional, for workers)
+    - Backup system
+    - Monitoring tools
+  </Tab>
+</Tabs>
+
+## Quick Requirements Check
+
+Verify your server meets requirements:
+
+```bash
+# Check PHP version
+php -v
+
+# Check PHP extensions
+php -m | grep -E "curl|json|pdo_mysql|mbstring|openssl|zip|xml"
+
+# Check Composer
+composer --version
+
+# Check MySQL version
+mysql --version
+```
+
+## Next Steps
+
+<Card title="Ready to install?" icon="rocket" href="/deployment/local-development">
+  Proceed to Local Development setup guide
+</Card>

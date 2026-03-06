@@ -1,0 +1,154 @@
+---
+title: "Save Settings"
+api: "POST /api/save-settings.php"
+description: "Update bot configuration settings"
+---
+
+## Overview
+
+Updates general bot settings. All fields are optional - only provided fields will be updated.
+
+## Request
+
+<ParamField body="systemPrompt" type="string">
+  AI system prompt that defines the bot's personality and behavior
+</ParamField>
+
+<ParamField body="welcomeMessage" type="string">
+  Initial greeting message sent to new users
+</ParamField>
+
+<ParamField body="errorMessage" type="string">
+  Fallback message when the bot cannot find relevant information
+</ParamField>
+
+<ParamField body="contextMessagesCount" type="integer">
+  Number of previous messages to include in conversation context (affects AI memory)
+</ParamField>
+
+<ParamField body="calendarEnabled" type="boolean">
+  Enable or disable Google Calendar integration
+</ParamField>
+
+<ParamField body="botMode" type="string">
+  Operating mode: `"ai"` for RAG-powered responses or `"classic"` for flow-based conversations
+</ParamField>
+
+<ParamField body="botName" type="string">
+  Display name for the bot
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl -X POST https://your-domain.com/api/save-settings.php \
+  -H "Content-Type: application/json" \
+  -d '{
+    "systemPrompt": "You are a helpful customer service assistant.",
+    "welcomeMessage": "Hello! How can I help you today?",
+    "contextMessagesCount": 10,
+    "botMode": "ai"
+  }'
+```
+
+```javascript JavaScript
+const response = await fetch('/api/save-settings.php', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    systemPrompt: 'You are a helpful customer service assistant.',
+    welcomeMessage: 'Hello! How can I help you today?',
+    contextMessagesCount: 10,
+    botMode: 'ai'
+  })
+});
+const data = await response.json();
+```
+
+```php PHP
+$data = [
+    'systemPrompt' => 'You are a helpful customer service assistant.',
+    'welcomeMessage' => 'Hello! How can I help you today?',
+    'contextMessagesCount' => 10,
+    'botMode' => 'ai'
+];
+
+$options = [
+    'http' => [
+        'header'  => "Content-Type: application/json\r\n",
+        'method'  => 'POST',
+        'content' => json_encode($data)
+    ]
+];
+
+$context = stream_context_create($options);
+$result = file_get_contents('https://your-domain.com/api/save-settings.php', false, $context);
+```
+</CodeGroup>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the settings were saved successfully
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Confirmation message (only present on success)
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error description (only present on failure)
+</ResponseField>
+
+### Success Response Example
+
+```json
+{
+  "success": true,
+  "message": "Configuración guardada correctamente"
+}
+```
+
+### Error Response Examples
+
+```json
+{
+  "success": false,
+  "error": "Error al guardar configuración"
+}
+```
+
+```json
+{
+  "success": false,
+  "error": "Invalid JSON input"
+}
+```
+
+## Error Handling
+
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Settings saved successfully |
+| 405 | Method not allowed (only POST accepted) |
+| 500 | Internal server error |
+
+## Implementation Details
+
+The endpoint:
+1. Validates that the request method is POST
+2. Parses the JSON request body
+3. Maps JSON keys to database setting keys
+4. Uses INSERT ... ON DUPLICATE KEY UPDATE to upsert settings
+5. Converts boolean values to string representation for storage
+6. Logs the operation for audit purposes
+
+Source: `api/save-settings.php:19-42`
+
+## Notes
+
+- All parameters are optional - send only the fields you want to update
+- Boolean values are automatically converted to strings (`"true"` or `"false"`)
+- Settings are stored individually in the database for flexibility
+- Changes take effect immediately for new conversations

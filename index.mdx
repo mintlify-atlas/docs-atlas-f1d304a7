@@ -1,97 +1,122 @@
 ---
-title: "Introduction"
-description: "Welcome to the new home for your documentation"
+title: "WhatsApp RAG Bot"
+description: "A WhatsApp chatbot platform with RAG architecture, AI-powered conversations, calendar integration, and visual flow builder"
 ---
 
-## Setting up
+## Build Intelligent WhatsApp Chatbots
 
-Get your documentation site up and running in minutes.
+WhatsApp RAG Bot is a complete platform for creating AI-powered WhatsApp chatbots that leverage your knowledge base through Retrieval-Augmented Generation (RAG). Build smart assistants that understand context, schedule appointments, and seamlessly hand off to human operators.
+
+<CardGroup cols={2}>
+  <Card
+    title="Quick Start"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get your WhatsApp bot running in under 10 minutes
+  </Card>
+  <Card
+    title="Installation Guide"
+    icon="download"
+    href="/installation"
+  >
+    Complete setup instructions for local and production environments
+  </Card>
+  <Card
+    title="API Reference"
+    icon="code"
+    href="/api/webhook"
+  >
+    Explore the complete API documentation
+  </Card>
+  <Card
+    title="Configuration"
+    icon="gear"
+    href="/configuration/credentials"
+  >
+    Configure WhatsApp, OpenAI, and Google Calendar integrations
+  </Card>
+</CardGroup>
+
+## Core Features
+
+<CardGroup cols={2}>
+  <Card
+    title="RAG-Powered Responses"
+    icon="brain"
+    href="/features/rag-system"
+  >
+    Upload documents and let AI answer questions using your knowledge base with vector similarity search
+  </Card>
+  <Card
+    title="AI Conversations"
+    icon="comments"
+    href="/features/ai-conversations"
+  >
+    Natural language understanding with OpenAI GPT, context-aware responses, and audio transcription
+  </Card>
+  <Card
+    title="Calendar Integration"
+    icon="calendar"
+    href="/features/calendar-integration"
+  >
+    Automated appointment scheduling with Google Calendar, smart intent detection, and conflict resolution
+  </Card>
+  <Card
+    title="Visual Flow Builder"
+    icon="diagram-project"
+    href="/features/flow-builder"
+  >
+    Create custom conversation flows with a visual editor for rule-based interactions
+  </Card>
+  <Card
+    title="Conversation Management"
+    icon="inbox"
+    href="/features/conversation-management"
+  >
+    Real-time dashboard to monitor conversations, toggle AI modes, and handle human handoffs
+  </Card>
+  <Card
+    title="Dual Bot Modes"
+    icon="toggle-on"
+    href="/features/ai-conversations"
+  >
+    Switch between AI-powered and classic rule-based bot modes for different use cases
+  </Card>
+</CardGroup>
+
+## Technology Stack
+
+The platform is built with modern PHP and integrates with industry-leading APIs:
+
+- **Backend**: PHP 7.4+, MySQL with vector storage
+- **AI**: OpenAI GPT for conversations, embeddings, and Whisper for audio transcription
+- **Messaging**: WhatsApp Business API with webhook support
+- **Calendar**: Google Calendar API for appointment scheduling
+- **Architecture**: RAG (Retrieval-Augmented Generation) with cosine similarity search
+
+## Get Started
+
+<Steps>
+  <Step title="Set up your environment">
+    Install PHP 7.4+, MySQL, and Composer dependencies
+  </Step>
+  <Step title="Configure API credentials">
+    Add your WhatsApp Business API, OpenAI API key, and Google Calendar credentials
+  </Step>
+  <Step title="Upload knowledge base">
+    Add PDF, DOCX, or TXT documents to build your bot's knowledge base
+  </Step>
+  <Step title="Deploy and connect">
+    Set up the webhook endpoint and start receiving WhatsApp messages
+  </Step>
+</Steps>
 
 <Card
-  title="Start here"
+  title="Ready to build?"
   icon="rocket"
   href="/quickstart"
   horizontal
 >
-  Follow our three step quickstart guide.
-</Card>
-
-## Make it yours
-
-Design a docs site that looks great and empowers your users.
-
-<Columns cols={2}>
-  <Card
-    title="Edit locally"
-    icon="pen-to-square"
-    href="/development"
-  >
-    Edit your docs locally and preview them in real time.
-  </Card>
-  <Card
-    title="Customize your site"
-    icon="palette"
-    href="/essentials/settings"
-  >
-    Customize the design and colors of your site to match your brand.
-  </Card>
-    <Card
-    title="Set up navigation"
-    icon="map"
-    href="/essentials/navigation"
-  >
-    Organize your docs to help users find what they need and succeed with your product.
-  </Card>
-  <Card
-    title="API documentation"
-    icon="terminal"
-    href="/api-reference/introduction"
-  >
-    Auto-generate API documentation from OpenAPI specifications.
-  </Card>
-</Columns>
-
-## Create beautiful pages
-
-Everything you need to create world-class documentation.
-
-<Columns cols={2}>
-  <Card
-    title="Write with MDX"
-    icon="pen-fancy"
-    href="/essentials/markdown"
-  >
-    Use MDX to style your docs pages.
-  </Card>
-  <Card
-    title="Code samples"
-    icon="code"
-    href="/essentials/code"
-  >
-    Add sample code to demonstrate how to use your product.
-  </Card>
-  <Card
-    title="Images"
-    icon="image"
-    href="/essentials/images"
-  >
-    Display images and other media.
-  </Card>
-  <Card
-    title="Reusable snippets"
-    icon="recycle"
-    href="/essentials/reusable-snippets"
-  >
-    Write once and reuse across your docs.
-  </Card>
-</Columns>
-
-## Need inspiration?
-
-<Card
-  title="See complete examples"
-  icon="stars"
-  href="https://mintlify.com/customers"
->
-  Browse our showcase of exceptional documentation sites.
+  Follow our quickstart guide to get your first bot running
 </Card>

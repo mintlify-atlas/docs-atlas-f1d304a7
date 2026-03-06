@@ -1,0 +1,638 @@
+---
+title: 'Calendar Services'
+description: 'Google Calendar integration and appointment scheduling logic'
+icon: 'calendar-days'
+---
+
+## Overview
+
+The calendar system consists of three interconnected services that handle appointment scheduling, intent detection, and conversational flows for booking appointments via WhatsApp.
+
+**Architecture:**
+1. **GoogleCalendarService** - Direct Google Calendar API integration
+2. **CalendarIntentService** - Detects user intent using OpenAI function calling
+3. **CalendarFlowHandler** - Manages multi-step appointment booking conversations
+
+---
+
+## GoogleCalendarService
+
+**Namespace:** `App\Services`
+
+Handles all interactions with the Google Calendar API, including creating events, checking availability, and managing appointments.
+
+### Constructor
+
+```php
+public function __construct(
+    string $accessToken,
+    string $calendarId,
+    Logger $logger,
+    string $timezone = 'America/Bogota',
+    string $refreshToken = null,
+    string $clientId = null,
+    string $clientSecret = null,
+    Database $db = null
+)
+```
+
+<ParamField path="accessToken" type="string" required>
+  Google OAuth2 access token
+</ParamField>
+
+<ParamField path="calendarId" type="string" required>
+  Google Calendar ID (usually email address)
+</ParamField>
+
+<ParamField path="logger" type="Logger" required>
+  Logger instance
+</ParamField>
+
+<ParamField path="timezone" type="string" default="America/Bogota">
+  Timezone for all date/time operations
+</ParamField>
+
+<ParamField path="refreshToken" type="string">
+  OAuth refresh token for automatic token renewal
+</ParamField>
+
+<ParamField path="clientId" type="string">
+  OAuth client ID
+</ParamField>
+
+<ParamField path="clientSecret" type="string">
+  OAuth client secret
+</ParamField>
+
+<ParamField path="db" type="Database">
+  Database for persisting refreshed tokens
+</ParamField>
+
+<CodeGroup>
+```php webhook.php
+$calendarConfig = CalendarConfigHelper::loadFromDatabase($db);
+$credentials = $credentialService->getGoogleOAuthCredentials();
+
+$calendar = new GoogleCalendarService(
+    $credentials['access_token'],
+    $credentials['calendar_id'],
+    $logger,
+    $calendarConfig['timezone'],
+    $credentials['refresh_token'],
+    $credentials['client_id'],
+    $credentials['client_secret'],
+    $db
+);
+```
+</CodeGroup>
+
+**Features:**
+- Automatic token refresh when access token expires
+- Timezone-aware date/time handling
+- Business hours validation
+- Conflict detection
+
+---
+
+### Core Calendar Methods
+
+#### createEvent
+
+Creates a new Google Calendar event.
+
+```php
+public function createEvent(
+    string $summary,
+    string $description,
+    string $startDateTime,
+    string $endDateTime,
+    string $attendeeEmail = null,
+    array $calendarConfig = null
+): array
+```
+
+<ParamField path="summary" type="string" required>
+  Event title (e.g., "Cita - Juan Pérez")
+</ParamField>
+
+<ParamField path="description" type="string" required>
+  Event description
+</ParamField>
+
+<ParamField path="startDateTime" type="string" required>
+  Start time in RFC3339 format (e.g., "2026-03-15T14:00:00")
+</ParamField>
+
+<ParamField path="endDateTime" type="string" required>
+  End time in RFC3339 format
+</ParamField>
+
+<ParamField path="attendeeEmail" type="string">
+  Guest email address
+</ParamField>
+
+<ParamField path="calendarConfig" type="array">
+  Configuration with reminder settings
+</ParamField>
+
+**Returns:** Google Calendar event array with `id`, `summary`, `start`, `end`, etc.
+
+<CodeGroup>
+```php CalendarFlowHandler.php
+$eventTitle = 'Cita - ' . $contactName;
+$description = 'Creado desde WhatsApp por ' . $contactName;
+if ($service) {
+    $description .= "\nMotivo: " . $service;
+}
+
+$startDateTime = new \DateTime("{$date} {$time}", new \DateTimeZone($timezone));
+$endDateTime = clone $startDateTime;
+$endDateTime->modify("+60 minutes");
+
+$event = $calendar->createEvent(
+    $eventTitle,
+    $description,
+    $startDateTime->format(\DateTime::RFC3339),
+    $endDateTime->format(\DateTime::RFC3339),
+    null,
+    $calendarConfig
+);
+```
+</CodeGroup>
+
+---
+
+#### listUpcomingEvents
+
+Retrieves upcoming events from the calendar.
+
+```php
+public function listUpcomingEvents(int $maxResults = 10): array
+```
+
+**Returns:** Array with `items` containing event objects
+
+---
+
+#### checkEventOverlap
+
+Checks if a time slot has any conflicting events.
+
+```php
+public function checkEventOverlap(
+    string $date,
+    string $startTime,
+    string $endTime
+): array
+```
+
+**Returns:** Array with `overlap` (boolean) and `events` (array of conflicting events)
+
+```php
+$result = $calendar->checkEventOverlap('2026-03-15', '14:00', '15:00');
+
+if ($result['overlap']) {
+    echo "Slot is busy. Conflicting events: " . count($result['events']);
+} else {
+    echo "Slot is available";
+}
+```
+
+---
+
+#### rescheduleEvent
+
+Moves an existing event to a new date/time.
+
+```php
+public function rescheduleEvent(
+    string $eventId,
+    string $newStart,
+    string $newEnd
+): array
+```
+
+<CodeGroup>
+```php Reschedule Flow
+$eventId = $rescheduleData['event_id'];
+$newStart = $date . 'T' . $time . ':00';
+$newEnd = $date . 'T' . date('H:i', strtotime($time) + 3600) . ':00';
+
+$calendar->rescheduleEvent($eventId, $newStart, $newEnd);
+```
+</CodeGroup>
+
+---
+
+#### deleteEvent
+
+Deletes an event from the calendar.
+
+```php
+public function deleteEvent(string $eventId): bool
+```
+
+---
+
+### Validation Methods
+
+#### validateDateNotPast
+
+Ensures a date is not in the past.
+
+```php
+public function validateDateNotPast(string $dateString): array
+```
+
+**Returns:**
+```php
+[
+    'valid' => false,
+    'message' => 'Esa fecha ya pasó. Por favor indica una fecha futura válida.'
+]
+```
+
+---
+
+#### validateMinAdvanceHours
+
+Ensures appointments are scheduled with minimum advance notice.
+
+```php
+public function validateMinAdvanceHours(
+    string $date,
+    string $time,
+    int $minAdvanceHours
+): array
+```
+
+```php
+$result = $calendar->validateMinAdvanceHours('2026-03-06', '15:00', 24);
+
+if (!$result['valid']) {
+    echo $result['message'];
+    // "Las citas requieren al menos 24 hora(s) de antelación..."
+}
+```
+
+---
+
+#### validateBusinessHours
+
+Checks if a date/time falls within business hours.
+
+```php
+public function validateBusinessHours(
+    string $date,
+    string $time,
+    array $businessHours
+): array
+```
+
+<ParamField path="businessHours" type="array" required>
+  Array with keys: `monday`, `tuesday`, etc., each containing `['start' => '09:00', 'end' => '18:00']`
+</ParamField>
+
+```php
+$businessHours = [
+    'monday' => ['start' => '09:00', 'end' => '18:00'],
+    'tuesday' => ['start' => '09:00', 'end' => '18:00'],
+    'saturday' => null,  // Closed
+    'sunday' => null     // Closed
+];
+
+$result = $calendar->validateBusinessHours('2026-03-15', '20:00', $businessHours);
+
+if (!$result['valid']) {
+    echo $result['reason'];
+    // "Horario fuera de atención. Atendemos de 09:00 a 18:00"
+}
+```
+
+---
+
+#### validateDateFormat
+
+Parses natural language dates into ISO format.
+
+```php
+public function validateDateFormat(string $dateText): ?string
+```
+
+**Supports:**
+- "mañana" → tomorrow
+- "hoy" → today
+- "pasado mañana" → day after tomorrow
+- "15/03/2026" → 2026-03-15
+- "15 de marzo" → current/next year
+- "15 de marzo del 2026" → 2026-03-15
+
+```php
+$date = $calendar->validateDateFormat('mañana');
+echo $date;  // "2026-03-07"
+
+$date = $calendar->validateDateFormat('15 de marzo del 2026');
+echo $date;  // "2026-03-15"
+```
+
+---
+
+## CalendarIntentService
+
+**Namespace:** `App\Services`
+
+Uses OpenAI function calling to detect user intent related to calendar operations.
+
+### Constructor
+
+```php
+public function __construct(
+    OpenAIService $openai,
+    Logger $logger
+)
+```
+
+---
+
+### detectIntent
+
+Analyzes user message to determine calendar-related intent.
+
+```php
+public function detectIntent(
+    string $message,
+    array $conversationHistory,
+    string $systemPrompt
+): array
+```
+
+**Returns:**
+```php
+[
+    'intent' => 'schedule',  // schedule, cancel, reschedule, list, check_availability, none
+    'extracted_data' => [
+        'date_preference' => 'mañana',
+        'time_preference' => '3pm',
+        'service_type' => 'consulta médica',
+        'is_confirmed' => false
+    ],
+    'confidence' => 'high',  // high, low
+    'original_response' => '...'
+]
+```
+
+**Detected Intents:**
+- `schedule` - User wants to book an appointment
+- `cancel` - User wants to cancel an appointment
+- `reschedule` - User wants to change appointment time
+- `list` - User wants to see their appointments
+- `check_availability` - User asking about available slots
+- `none` - No calendar-related intent
+
+<CodeGroup>
+```php webhook.php
+$calendarIntent = new CalendarIntentService($openai, $logger);
+
+$result = $calendarIntent->detectIntent(
+    $messageData['text'],
+    $conversationHistory,
+    $systemPrompt
+);
+
+if ($result['intent'] === 'schedule' && $result['confidence'] === 'high') {
+    // Start scheduling flow
+    $flowHandler->startFlow(
+        'schedule',
+        $result['extracted_data'],
+        $conversation,
+        $messageData
+    );
+}
+```
+</CodeGroup>
+
+---
+
+## CalendarFlowHandler
+
+**Namespace:** `App\Handlers`
+
+Manages multi-step conversational flows for appointment scheduling, cancellation, and rescheduling.
+
+### Constructor
+
+```php
+public function __construct(
+    Database $db,
+    Logger $logger,
+    GoogleCalendarService $calendar,
+    OpenAIService $openai,
+    array $calendarConfig,
+    ConversationService $conversationService
+)
+```
+
+---
+
+### Flow States
+
+The handler manages these conversation steps:
+
+| Step | Description |
+|------|-------------|
+| `expecting_date` | Waiting for appointment date |
+| `expecting_time` | Waiting for appointment time |
+| `expecting_service` | Waiting for appointment reason/type |
+| `expecting_confirmation` | Waiting for final confirmation |
+| `cancel_select` | User selecting which appointment to cancel |
+| `cancel_confirm` | Confirming cancellation |
+| `reschedule_select` | User selecting which appointment to reschedule |
+| `reschedule_reason` | Asking why they're rescheduling |
+
+---
+
+### Main Methods
+
+#### startFlow
+
+Initiates a calendar flow based on detected intent.
+
+```php
+public function startFlow(
+    string $intent,
+    array $extractedData,
+    array $conversation,
+    array $messageData
+): array
+```
+
+**Returns:**
+```php
+[
+    'handled' => true,
+    'response' => 'Con gusto te agendo una cita. ¿Qué fecha prefieres?...',
+    'status' => 'expecting_date'
+]
+```
+
+---
+
+#### handleActiveFlow
+
+Processes user input when a flow is in progress.
+
+```php
+public function handleActiveFlow(
+    array $flowState,
+    string $message,
+    array $conversation,
+    array $messageData
+): array
+```
+
+<CodeGroup>
+```php webhook.php
+$flowState = $flowHandler->getFlowState($messageData['from']);
+
+if ($flowState) {
+    $result = $flowHandler->handleActiveFlow(
+        $flowState,
+        $messageData['text'],
+        $conversation,
+        $messageData
+    );
+    
+    if ($result['handled']) {
+        $whatsapp->sendMessage($messageData['from'], $result['response']);
+        exit;
+    }
+}
+```
+</CodeGroup>
+
+---
+
+#### clearFlowState
+
+Ends the flow and cleans up session data.
+
+```php
+public function clearFlowState(string $phone): void
+```
+
+---
+
+### Complete Scheduling Flow
+
+<CodeGroup>
+```php Scheduling Example
+// User: "Quiero agendar una cita para mañana a las 3pm"
+
+// 1. Intent detection
+$intent = $calendarIntent->detectIntent($message, $history, $systemPrompt);
+// Returns: ['intent' => 'schedule', 'extracted_data' => ['date_preference' => 'mañana', ...]]
+
+// 2. Start flow
+$result = $flowHandler->startFlow(
+    'schedule',
+    $intent['extracted_data'],
+    $conversation,
+    $messageData
+);
+// Returns: ['handled' => true, 'response' => 'Perfecto, mañana. ¿A qué hora?', ...]
+
+// 3. User: "3pm"
+$result = $flowHandler->handleActiveFlow($flowState, '3pm', $conversation, $messageData);
+// Validates time, checks availability, asks for service type
+
+// 4. User: "consulta médica"
+$result = $flowHandler->handleActiveFlow($flowState, 'consulta médica', $conversation, $messageData);
+// Asks for confirmation
+
+// 5. User: "sí"
+$result = $flowHandler->handleActiveFlow($flowState, 'sí', $conversation, $messageData);
+// Creates event, sends confirmation
+// Returns: ['handled' => true, 'response' => '✅ ¡Cita confirmada! 📅 07/03/2026 a las 15:00', ...]
+```
+</CodeGroup>
+
+---
+
+## Database Schema
+
+### calendar_flow_state Table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `user_phone` | VARCHAR | Primary key - user's phone |
+| `conversation_id` | INT | Foreign key to conversations |
+| `current_step` | VARCHAR | Current flow step |
+| `extracted_date` | DATE | Selected date |
+| `extracted_time` | TIME | Selected time |
+| `extracted_service` | VARCHAR | Appointment reason |
+| `event_title` | VARCHAR | Event title to create |
+| `cancel_events_json` | TEXT | JSON array of events for cancel/reschedule |
+| `attempts` | INT | Failed validation attempts |
+| `expires_at` | TIMESTAMP | Session expiration |
+
+---
+
+## Configuration
+
+<CodeGroup>
+```php Calendar Config
+$calendarConfig = [
+    'enabled' => true,
+    'timezone' => 'America/Bogota',
+    'default_duration_minutes' => 60,
+    'min_advance_hours' => 24,
+    'business_hours' => [
+        'monday' => ['start' => '09:00', 'end' => '18:00'],
+        'tuesday' => ['start' => '09:00', 'end' => '18:00'],
+        'wednesday' => ['start' => '09:00', 'end' => '18:00'],
+        'thursday' => ['start' => '09:00', 'end' => '18:00'],
+        'friday' => ['start' => '09:00', 'end' => '18:00'],
+        'saturday' => null,
+        'sunday' => null
+    ],
+    'reminders' => [
+        'email' => ['enabled' => true, 'minutes_before' => 1440],
+        'popup' => ['enabled' => true, 'minutes_before' => 30]
+    ]
+];
+```
+</CodeGroup>
+
+---
+
+## Best Practices
+
+<Tip>
+**Always validate appointments** using the three-step validation:
+1. Date not in past
+2. Within business hours
+3. Minimum advance notice met
+</Tip>
+
+<Warning>
+**Flow expiration:** Calendar flows expire after 30 minutes of inactivity. Always check `isFlowExpired` before processing.
+</Warning>
+
+<Note>
+**Token refresh:** The GoogleCalendarService automatically refreshes expired access tokens using the refresh token, and persists the new token to the database.
+</Note>
+
+---
+
+## Related Services
+
+- [Conversation Service](/services/conversation-service) - Tracks flow state per conversation
+- [OpenAI Service](/services/openai-service) - Powers intent detection
+- [WhatsApp Service](/services/whatsapp-service) - Sends appointment confirmations
+- [Classic Calendar Flow Handler](/services/flow-builder-service#classic-calendar-flow) - Menu-based alternative
+
+## Source Code
+
+- GoogleCalendarService: `src/Services/GoogleCalendarService.php:1-490`
+- CalendarIntentService: `src/Services/CalendarIntentService.php:1-127`
+- CalendarFlowHandler: `src/Handlers/CalendarFlowHandler.php:1-1300+`

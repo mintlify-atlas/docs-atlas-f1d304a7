@@ -1,0 +1,685 @@
+---
+title: 'Webhook Endpoint'
+description: 'Receive and process WhatsApp messages and webhook verification requests'
+---
+
+The webhook endpoint handles both GET requests for WhatsApp webhook verification and POST requests for incoming messages. This is the main entry point for all WhatsApp interactions.
+
+## Base URL
+
+```
+https://your-domain.com/webhook.php
+```
+
+<Note>
+This endpoint must be publicly accessible and registered in your WhatsApp Business API configuration.
+</Note>
+
+---
+
+## GET /webhook
+
+Verifies your webhook with WhatsApp during initial setup.
+
+### Query Parameters
+
+<ParamField query="hub.mode" type="string" required>
+  The verification mode. Must be `subscribe` for successful verification.
+</ParamField>
+
+<ParamField query="hub.verify_token" type="string" required>
+  The verification token that must match your configured `WHATSAPP_VERIFY_TOKEN`.
+</ParamField>
+
+<ParamField query="hub.challenge" type="string" required>
+  A challenge string that must be echoed back to complete verification.
+</ParamField>
+
+### Response
+
+<ResponseField name="challenge" type="string">
+  The challenge value is returned as plain text with HTTP 200 status on successful verification.
+</ResponseField>
+
+### Example Request
+
+```bash
+GET /webhook.php?hub.mode=subscribe&hub.verify_token=your_token&hub.challenge=1234567890
+```
+
+### Example Response
+
+**Success (200)**
+```
+1234567890
+```
+
+**Failure (403)**
+```
+Forbidden
+```
+
+### Implementation Details
+
+```php webhook.php:84-104
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $mode = $_GET['hub_mode'] ?? '';
+    $token = $_GET['hub_verify_token'] ?? '';
+    $challenge = $_GET['hub_challenge'] ?? '';
+    
+    if ($credentialService && $credentialService->hasWhatsAppCredentials()) {
+        $waCreds = $credentialService->getWhatsAppCredentials();
+        $verifyToken = $waCreds['verify_token'];
+    } else {
+        $verifyToken = Config::get('whatsapp.verify_token');
+    }
+    
+    if ($mode === 'subscribe' && $token === $verifyToken) {
+        echo $challenge;
+        http_response_code(200);
+        exit;
+    }
+    
+    http_response_code(403);
+    exit;
+}
+```
+
+<Warning>
+Verification tokens are loaded from encrypted credentials or config files. Always keep your verify token secure.
+</Warning>
+
+---
+
+## POST /webhook
+
+Receives incoming WhatsApp messages and processes them through the RAG bot pipeline.
+
+### Headers
+
+<ParamField header="X-Hub-Signature-256" type="string" required>
+  HMAC SHA-256 signature of the request payload, used to verify the request authenticity.
+  Format: `sha256={hash}`
+</ParamField>
+
+<ParamField header="Content-Type" type="string" required>
+  Must be `application/json`
+</ParamField>
+
+### Signature Verification
+
+All incoming webhook requests are verified using HMAC SHA-256:
+
+```php webhook.php:115-124
+if ($appSecret) {
+    $signature = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
+    $expected = 'sha256=' . hash_hmac('sha256', $rawBody, $appSecret);
+    if (!hash_equals($expected, $signature)) {
+        http_response_code(401);
+        exit('Unauthorized');
+    }
+} else {
+    $logger->warning('Webhook signature validation SKIPPED - no app_secret configured');
+}
+```
+
+<Warning>
+Always configure your `app_secret` to enable signature verification. Requests without valid signatures are rejected with HTTP 401.
+</Warning>
+
+### Request Body
+
+WhatsApp sends webhook events in the following format:
+
+```json
+{
+  "object": "whatsapp_business_account",
+  "entry": [
+    {
+      "id": "WHATSAPP_BUSINESS_ACCOUNT_ID",
+      "changes": [
+        {
+          "value": {
+            "messaging_product": "whatsapp",
+            "metadata": {
+              "display_phone_number": "PHONE_NUMBER",
+              "phone_number_id": "PHONE_NUMBER_ID"
+            },
+            "contacts": [
+              {
+                "profile": {
+                  "name": "CONTACT_NAME"
+                },
+                "wa_id": "WHATSAPP_ID"
+              }
+            ],
+            "messages": [
+              {
+                "from": "SENDER_PHONE_NUMBER",
+                "id": "MESSAGE_ID",
+                "timestamp": "TIMESTAMP",
+                "type": "text",
+                "text": {
+                  "body": "MESSAGE_TEXT"
+                }
+              }
+            ]
+          },
+          "field": "messages"
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Supported Message Types
+
+#### Text Messages
+
+```json
+{
+  "type": "text",
+  "text": {
+    "body": "Hello, I need help with my order"
+  }
+}
+```
+
+#### Audio Messages
+
+<Note>
+Audio messages are automatically transcribed using OpenAI Whisper and processed as text.
+</Note>
+
+```json
+{
+  "type": "audio",
+  "audio": {
+    "id": "AUDIO_MEDIA_ID",
+    "mime_type": "audio/ogg; codecs=opus"
+  }
+}
+```
+
+Audio processing flow:
+
+```php webhook.php:206-260
+if ($messageData['type'] === 'audio' && isset($messageData['audio_id'])) {
+    try {
+        $audioContent = $whatsapp->downloadMedia($messageData['audio_id']);
+        
+        $contactName = preg_replace('/[^a-zA-Z0-9_-]/', '_', $messageData['contact_name']);
+        $phoneNumber = $messageData['from'];
+        $conversationFolder = $contactName . '_' . $phoneNumber;
+        
+        $audioDir = __DIR__ . '/uploads/audios/' . $conversationFolder;
+        if (!file_exists($audioDir)) {
+            mkdir($audioDir, 0755, true);
+        }
+        
+        $audioFileName = uniqid('audio_') . '_' . time() . '.ogg';
+        $audioPath = $audioDir . '/' . $audioFileName;
+        file_put_contents($audioPath, $audioContent);
+        
+        $messageData['audio_url'] = '/uploads/audios/' . $conversationFolder . '/' . $audioFileName;
+        
+        $transcription = $openai->transcribeAudio($audioContent, 'audio.ogg');
+        
+        $messageData['text'] = '[Audio] ' . $transcription;
+    } catch (\Exception $e) {
+        $logger->error('Audio processing error: ' . $e->getMessage());
+        $whatsapp->sendMessage($messageData['from'], 'Lo siento, no pude procesar el audio.');
+        http_response_code(200);
+        exit;
+    }
+}
+```
+
+#### Unsupported Message Types
+
+The following message types receive an automated response:
+
+- `image`
+- `document`
+- `location`
+- `video`
+- `sticker`
+- `contacts`
+
+```php webhook.php:187-204
+$unsupportedTypes = ['image', 'document', 'location', 'video', 'sticker', 'contacts'];
+if (in_array($messageData['type'], $unsupportedTypes)) {
+    $unsupportedMsg = "Lo siento, por el momento solo puedo procesar mensajes de *texto*.";
+    $whatsapp->sendMessage($messageData['from'], $unsupportedMsg);
+    http_response_code(200);
+    echo json_encode(['status' => 'unsupported_media_type']);
+    exit;
+}
+```
+
+### Response Codes
+
+<ResponseField name="200" type="success">
+  Message received and processed successfully. Returns a JSON object with processing status.
+</ResponseField>
+
+<ResponseField name="401" type="error">
+  Invalid webhook signature. Request authentication failed.
+</ResponseField>
+
+<ResponseField name="405" type="error">
+  Method not allowed. Only GET and POST methods are supported.
+</ResponseField>
+
+<ResponseField name="500" type="error">
+  Internal server error during message processing.
+</ResponseField>
+
+### Response Status Types
+
+The webhook returns different status values based on the processing outcome:
+
+| Status | Description |
+|--------|-------------|
+| `success` | Message processed successfully with RAG response |
+| `ignored` | Webhook event without a valid message payload |
+| `no_text` | Message received but contains no text content |
+| `already_processed` | Duplicate message ID detected and skipped |
+| `unsupported_media_type` | Message type not supported |
+| `audio_error` | Failed to process audio message |
+| `audio_not_supported_classic` | Audio not supported in classic bot mode |
+| `human_requested` | User requested human intervention |
+| `ai_disabled` | AI responses disabled for this conversation |
+| `classic_response` | Processed by classic (rule-based) bot |
+| `classic_calendar` | Calendar flow initiated in classic mode |
+| `calendar_flow` | Calendar flow in progress |
+| `fallback` | No relevant response found, fallback message sent |
+
+### Example Response
+
+**Success with RAG Response**
+```json
+{
+  "status": "success",
+  "confidence": 0.85,
+  "sources": 3
+}
+```
+
+**Message Already Processed**
+```json
+{
+  "status": "already_processed"
+}
+```
+
+**Unsupported Media Type**
+```json
+{
+  "status": "unsupported_media_type"
+}
+```
+
+---
+
+## Message Processing Flow
+
+The webhook processes messages through the following pipeline:
+
+### 1. Payload Parsing
+
+```php WhatsAppService.php:135-167
+public function parseWebhookPayload($payload)
+{
+    if (!isset($payload['entry'][0]['changes'][0]['value'])) {
+        return null;
+    }
+
+    $value = $payload['entry'][0]['changes'][0]['value'];
+    
+    if (!isset($value['messages'][0])) {
+        return null;
+    }
+
+    $message = $value['messages'][0];
+    $messageType = $message['type'] ?? 'text';
+    
+    $data = [
+        'from' => $message['from'] ?? null,
+        'text' => '',
+        'message_id' => $message['id'] ?? null,
+        'timestamp' => $message['timestamp'] ?? time(),
+        'contact_name' => $value['contacts'][0]['profile']['name'] ?? 'Unknown',
+        'type' => $messageType
+    ];
+
+    if ($messageType === 'text') {
+        $data['text'] = $message['text']['body'] ?? '';
+    } elseif ($messageType === 'audio') {
+        $data['audio_id'] = $message['audio']['id'] ?? null;
+        $data['mime_type'] = $message['audio']['mime_type'] ?? 'audio/ogg';
+    }
+
+    return $data;
+}
+```
+
+### 2. Duplicate Detection
+
+```php webhook.php:275-289
+if ($messageData['message_id']) {
+    $existingMessage = $db->fetchOne(
+        'SELECT id FROM messages WHERE message_id = :message_id',
+        [':message_id' => $messageData['message_id']]
+    );
+    
+    if ($existingMessage) {
+        http_response_code(200);
+        echo json_encode(['status' => 'already_processed']);
+        exit;
+    }
+}
+```
+
+### 3. Conversation Management
+
+```php webhook.php:268-305
+$conversationService = new ConversationService($db);
+
+$conversation = $conversationService->getOrCreateConversation(
+    $messageData['from'],
+    $messageData['contact_name']
+);
+
+$conversationService->addMessage(
+    $conversation['id'],
+    'user',
+    $messageData['text'],
+    $messageData['message_id'],
+    null,
+    null,
+    $messageData['audio_url'] ?? null,
+    $messageData['type']
+);
+
+if ($messageData['message_id']) {
+    $whatsapp->markAsRead($messageData['message_id']);
+}
+```
+
+### 4. Human Intervention Detection
+
+```php webhook.php:311-351
+$humanKeywords = ['hablar con humano', 'hablar con una persona', 'hablar con operador', 
+                  'quiero un humano', 'atención humana', 'operador', 'agente humano'];
+
+$messageLower = mb_strtolower($messageData['text']);
+$isRequestingHuman = false;
+
+foreach ($humanKeywords as $keyword) {
+    if (strpos($messageLower, $keyword) !== false) {
+        $isRequestingHuman = true;
+        break;
+    }
+}
+
+if ($isRequestingHuman) {
+    $humanMessage = 'Enseguida te comunico con alguien de nuestro equipo.';
+    $whatsapp->sendMessage($messageData['from'], $humanMessage);
+    
+    $conversationService->updateConversationStatus($conversation['id'], 'pending_human');
+    $db->query(
+        'UPDATE conversations SET ai_enabled = 0 WHERE id = :id',
+        [':id' => $conversation['id']]
+    );
+    
+    http_response_code(200);
+    echo json_encode(['status' => 'human_requested']);
+    exit;
+}
+```
+
+### 5. Bot Mode Detection
+
+<Note>
+The webhook supports two bot modes: **AI mode** (RAG-based responses) and **Classic mode** (rule-based responses).
+</Note>
+
+```php webhook.php:181-186
+$botModeRow = $db->fetchOne(
+    "SELECT setting_value FROM settings WHERE setting_key = 'bot_mode'",
+    []
+);
+$botMode = $botModeRow['setting_value'] ?? 'ai';
+```
+
+### 6. Calendar Intent Detection
+
+In AI mode, calendar intents are detected and handled:
+
+```php webhook.php:552-584
+$intentService = new CalendarIntentService($openai, $logger);
+$intent = $intentService->detectIntent(
+    $messageData['text'], $conversationHistory, $systemPrompt
+);
+
+if ($intent['intent'] !== 'none') {
+    $flowResult = $flowHandler->startFlow(
+        $intent['intent'], $intent['extracted_data'], $conversation, $messageData
+    );
+    
+    if ($flowResult['handled']) {
+        $whatsapp->sendMessage($messageData['from'], $flowResult['response']);
+        http_response_code(200);
+        exit;
+    }
+}
+```
+
+### 7. RAG Processing
+
+```php webhook.php:586-638
+$vectorSearch = new VectorSearchService($db, Config::get('rag.similarity_method'));
+$rag = new RAGService($openai, $vectorSearch, $logger, 3, 0.7, $db);
+
+$result = $rag->generateResponse(
+    $messageData['text'], 
+    $systemPrompt, 
+    $conversationHistory, 
+    $openaiTemperature, 
+    $openaiMaxTokens
+);
+
+if ($result['response'] && $result['confidence'] >= Config::get('rag.similarity_threshold')) {
+    $whatsapp->sendMessage($conversation['phone_number'], $result['response']);
+    
+    $conversationService->addMessage(
+        $conversation['id'],
+        'bot',
+        $result['response'],
+        null,
+        $result['context'],
+        $result['confidence']
+    );
+    
+    http_response_code(200);
+    echo json_encode([
+        'status' => 'success',
+        'confidence' => $result['confidence'],
+        'sources' => count($result['sources'])
+    ]);
+    exit;
+}
+```
+
+### 8. Fallback Response
+
+If RAG confidence is below threshold, the system falls back to OpenAI:
+
+```php webhook.php:660-686
+if (!$fallbackResponse) {
+    $fallbackResponse = $openai->generateResponse(
+        $messageData['text'], 
+        '', 
+        $systemPrompt, 
+        $openaiTemperature, 
+        $openaiMaxTokens, 
+        $conversationHistory
+    );
+}
+
+if ($fallbackResponse) {
+    $whatsapp->sendMessage($conversation['phone_number'], $fallbackResponse);
+    
+    $conversationService->addMessage(
+        $conversation['id'],
+        'bot',
+        $fallbackResponse
+    );
+    
+    http_response_code(200);
+    echo json_encode([
+        'status' => 'processed', 
+        'type' => 'openai'
+    ]);
+    exit;
+}
+```
+
+---
+
+## Error Handling
+
+### Insufficient Funds Detection
+
+```php webhook.php:22-37
+function handleInsufficientFunds($db, $e) {
+    if (strpos($e->getMessage(), 'INSUFFICIENT_FUNDS') !== false) {
+        $db->query(
+            "INSERT INTO settings (setting_key, setting_value) 
+             VALUES ('openai_status', 'insufficient_funds') 
+             ON DUPLICATE KEY UPDATE setting_value = 'insufficient_funds'",
+            []
+        );
+        $db->query(
+            "INSERT INTO settings (setting_key, setting_value) 
+             VALUES ('openai_error_timestamp', NOW()) 
+             ON DUPLICATE KEY UPDATE setting_value = NOW()",
+            []
+        );
+        return true;
+    }
+    return false;
+}
+```
+
+### Global Exception Handling
+
+```php webhook.php:708-715
+catch (\Exception $e) {
+    if (isset($logger)) {
+        $logger->error('Webhook Error: ' . $e->getMessage());
+    }
+    
+    http_response_code(500);
+    echo json_encode(['error' => 'Internal server error']);
+}
+```
+
+---
+
+## Testing the Webhook
+
+### Verify Webhook Setup
+
+```bash
+curl "https://your-domain.com/webhook.php?hub.mode=subscribe&hub.verify_token=your_token&hub.challenge=test123"
+```
+
+Expected response:
+```
+test123
+```
+
+### Send Test Message
+
+```bash
+curl -X POST https://your-domain.com/webhook.php \
+  -H "Content-Type: application/json" \
+  -H "X-Hub-Signature-256: sha256=YOUR_SIGNATURE" \
+  -d '{
+    "object": "whatsapp_business_account",
+    "entry": [{
+      "id": "BUSINESS_ACCOUNT_ID",
+      "changes": [{
+        "value": {
+          "messaging_product": "whatsapp",
+          "metadata": {
+            "display_phone_number": "1234567890",
+            "phone_number_id": "PHONE_ID"
+          },
+          "contacts": [{
+            "profile": {"name": "Test User"},
+            "wa_id": "1234567890"
+          }],
+          "messages": [{
+            "from": "1234567890",
+            "id": "msg_123",
+            "timestamp": "1234567890",
+            "type": "text",
+            "text": {"body": "Hello"}
+          }]
+        },
+        "field": "messages"
+      }]
+    }]
+  }'
+```
+
+<Warning>
+Always include a valid `X-Hub-Signature-256` header when testing. You can temporarily disable signature verification for testing by removing the `app_secret` from your configuration.
+</Warning>
+
+---
+
+## Security Best Practices
+
+1. **Always verify webhook signatures** to ensure requests come from WhatsApp
+2. **Use HTTPS** for your webhook endpoint
+3. **Keep your verify token and app secret secure** - never commit them to version control
+4. **Implement rate limiting** to prevent abuse
+5. **Log all webhook events** for debugging and audit purposes
+6. **Handle duplicate messages** using message ID tracking
+7. **Validate all input data** before processing
+
+---
+
+## Troubleshooting
+
+### Webhook Not Receiving Messages
+
+- Verify your webhook URL is publicly accessible
+- Check that your verify token matches the one in WhatsApp settings
+- Ensure your SSL certificate is valid
+- Review server logs for errors
+
+### Signature Verification Failing
+
+- Confirm your `app_secret` matches the one in Meta App Dashboard
+- Verify you're using the raw request body for signature calculation
+- Check that the signature header is being passed correctly
+
+### Messages Not Being Processed
+
+- Check OpenAI API credentials and quota
+- Verify database connection is working
+- Review conversation status and `ai_enabled` flag
+- Check for duplicate message IDs in the database
+
+### Audio Messages Failing
+
+- Ensure OpenAI Whisper API is accessible
+- Verify file permissions for the `uploads/audios/` directory
+- Check audio file format compatibility (OGG with Opus codec)
+- Review audio processing logs for specific errors

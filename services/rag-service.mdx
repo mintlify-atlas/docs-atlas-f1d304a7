@@ -1,0 +1,457 @@
+---
+title: RAG Service
+description: Orchestrates Retrieval-Augmented Generation for contextual AI responses
+icon: brain
+---
+
+## Overview
+
+The `RAGService` is the core component that implements Retrieval-Augmented Generation (RAG). It combines vector search with OpenAI's language models to provide context-aware, accurate responses based on your indexed documents.
+
+## Class Structure
+
+### Constructor
+
+```php
+public function __construct(
+    OpenAIService $openai,
+    VectorSearchService $vectorSearch,
+    Logger $logger,
+    $topK = 3,
+    $threshold = 0.7,
+    Database $db = null
+)
+```
+
+<ParamField path="openai" type="OpenAIService" required>
+  OpenAI service instance for embeddings and chat completions
+</ParamField>
+
+<ParamField path="vectorSearch" type="VectorSearchService" required>
+  Vector search service for finding similar document chunks
+</ParamField>
+
+<ParamField path="logger" type="Logger" required>
+  Logger instance for tracking operations
+</ParamField>
+
+<ParamField path="topK" type="int" default="3">
+  Number of most similar chunks to retrieve
+</ParamField>
+
+<ParamField path="threshold" type="float" default="0.7">
+  Minimum similarity score (0.0-1.0) to include a chunk
+</ParamField>
+
+<ParamField path="db" type="Database" default="null">
+  Optional database connection for embedding caching
+</ParamField>
+
+### Instantiation Example
+
+```php webhook.php
+$vectorSearch = new VectorSearchService(
+    $db,
+    Config::get('rag.similarity_method')
+);
+
+$rag = new RAGService(
+    $openai,
+    $vectorSearch,
+    $logger,
+    3,      // Top 3 results
+    0.7,    // 70% similarity threshold
+    $db     // Enable caching
+);
+```
+
+## Core Methods
+
+### generateResponse()
+
+Generates an AI response using relevant document context.
+
+```php
+public function generateResponse(
+    $userMessage,
+    $systemPrompt = null,
+    $conversationHistory = [],
+    $temperature = 0.7,
+    $maxTokens = 500
+)
+```
+
+<ParamField path="userMessage" type="string" required>
+  The user's query or message
+</ParamField>
+
+<ParamField path="systemPrompt" type="string" default="null">
+  Custom system prompt to guide AI behavior
+</ParamField>
+
+<ParamField path="conversationHistory" type="array" default="[]">
+  Previous messages for context (format: `[['sender' => 'user|bot', 'message_text' => '...']]`)
+</ParamField>
+
+<ParamField path="temperature" type="float" default="0.7">
+  Creativity level (0.0-1.0)
+</ParamField>
+
+<ParamField path="maxTokens" type="int" default="500">
+  Maximum response length
+</ParamField>
+
+**Returns:** Array containing:
+- `response` (string|null): Generated AI response
+- `context` (string): Retrieved document context
+- `confidence` (float): Highest similarity score
+- `sources` (array): Source documents with scores
+
+#### Usage Example
+
+```php webhook.php
+$result = $rag->generateResponse(
+    $messageData['text'],
+    $systemPrompt,
+    $conversationHistory,
+    $openaiTemperature,
+    $openaiMaxTokens
+);
+
+if ($result['response'] && $result['confidence'] >= 0.7) {
+    $whatsapp->sendMessage(
+        $conversation['phone_number'],
+        $result['response']
+    );
+    
+    $conversationService->addMessage(
+        $conversation['id'],
+        'bot',
+        $result['response'],
+        null,
+        $result['context'],
+        $result['confidence']
+    );
+}
+```
+
+### indexDocument()
+
+Indexes a document by splitting it into chunks and generating embeddings.
+
+```php
+public function indexDocument(
+    $documentId,
+    $text,
+    $chunkSize = 500,
+    $overlap = 50
+)
+```
+
+<ParamField path="documentId" type="int" required>
+  Database ID of the document being indexed
+</ParamField>
+
+<ParamField path="text" type="string" required>
+  Full text content to index
+</ParamField>
+
+<ParamField path="chunkSize" type="int" default="500">
+  Number of words per chunk
+</ParamField>
+
+<ParamField path="overlap" type="int" default="50">
+  Number of overlapping words between chunks
+</ParamField>
+
+**Returns:** Number of chunks successfully indexed
+
+#### Usage Example
+
+```php
+$documentText = TextProcessor::extractText($filePath, 'pdf');
+$chunksIndexed = $rag->indexDocument(
+    $documentId,
+    $documentText,
+    500,  // 500 words per chunk
+    50    // 50 word overlap
+);
+
+$logger->info("Indexed {$chunksIndexed} chunks");
+```
+
+## RAG Pipeline Algorithm
+
+The `generateResponse()` method implements a sophisticated RAG pipeline:
+
+<Steps>
+  <Step title="Query Embedding">
+    Converts the user's message into a vector embedding, using cache if available
+    
+    ```php
+    $queryEmbedding = $this->getCachedOrCreateEmbedding($userMessage);
+    ```
+  </Step>
+  
+  <Step title="Vector Search">
+    Searches for the most similar document chunks
+    
+    ```php
+    $similarChunks = $this->vectorSearch->searchSimilar(
+        $queryEmbedding,
+        $this->topK,
+        $this->threshold
+    );
+    ```
+  </Step>
+  
+  <Step title="Context Assembly">
+    Combines retrieved chunks into a context string
+    
+    ```php
+    foreach ($similarChunks as $chunk) {
+        $contextParts[] = $chunk['chunk_text'];
+        $sources[] = [
+            'document' => $chunk['original_name'],
+            'score' => $chunk['score']
+        ];
+        $maxScore = max($maxScore, $chunk['score']);
+    }
+    $context = implode("\n\n", $contextParts);
+    ```
+  </Step>
+  
+  <Step title="Response Generation">
+    Generates AI response with context and conversation history
+    
+    ```php
+    $response = $this->openai->generateResponse(
+        $userMessage,
+        $context,
+        $systemPrompt,
+        $temperature,
+        $maxTokens,
+        $conversationHistory
+    );
+    ```
+  </Step>
+</Steps>
+
+## Embedding Caching
+
+The service implements intelligent embedding caching to reduce API costs and improve response times.
+
+### Cache Strategy
+
+<Tabs>
+  <Tab title="Cache Lookup">
+    ```php
+    $normalized = trim(mb_strtolower($userMessage));
+    $queryHash = md5($normalized);
+    
+    $cached = $this->db->fetchOne(
+        'SELECT embedding FROM query_embedding_cache 
+         WHERE query_hash = :hash 
+         AND created_at > DATE_SUB(NOW(), INTERVAL 24 HOUR)',
+        [':hash' => $queryHash]
+    );
+    
+    if ($cached && !empty($cached['embedding'])) {
+        $this->db->query(
+            'UPDATE query_embedding_cache 
+             SET last_used_at = NOW(), hit_count = hit_count + 1 
+             WHERE query_hash = :hash',
+            [':hash' => $queryHash]
+        );
+        return VectorMath::unserializeVector($cached['embedding']);
+    }
+    ```
+  </Tab>
+  
+  <Tab title="Cache Storage">
+    ```php
+    $embedding = $this->openai->createEmbedding($userMessage);
+    $binaryEmbedding = VectorMath::serializeVector($embedding);
+    
+    $this->db->query(
+        'INSERT INTO query_embedding_cache 
+         (query_hash, embedding, created_at, last_used_at, hit_count)
+         VALUES (:hash, :embedding, NOW(), NOW(), 0)
+         ON DUPLICATE KEY UPDATE 
+         embedding = :embedding2, 
+         created_at = NOW(), 
+         last_used_at = NOW()',
+        [
+            ':hash' => $queryHash,
+            ':embedding' => $binaryEmbedding,
+            ':embedding2' => $binaryEmbedding
+        ]
+    );
+    ```
+  </Tab>
+  
+  <Tab title="Cache Cleanup">
+    ```php
+    private function cleanExpiredCache()
+    {
+        try {
+            $this->db->query(
+                'DELETE FROM query_embedding_cache 
+                 WHERE last_used_at < DATE_SUB(NOW(), INTERVAL 7 DAY)'
+            );
+        } catch (\Exception $e) {
+            $this->logger->warning('RAG: Cache cleanup failed');
+        }
+    }
+    ```
+  </Tab>
+</Tabs>
+
+### Cache Benefits
+
+<CardGroup cols={2}>
+  <Card title="Cost Reduction" icon="dollar-sign">
+    Avoids redundant embedding API calls for repeated queries
+  </Card>
+  <Card title="Performance" icon="gauge-high">
+    Instant embedding retrieval from database
+  </Card>
+  <Card title="Case Insensitive" icon="text">
+    Normalizes queries to maximize cache hits
+  </Card>
+  <Card title="Auto Cleanup" icon="broom">
+    Removes entries unused for 7 days
+  </Card>
+</CardGroup>
+
+## Response Structure
+
+### No Context Found
+
+```php
+if (empty($similarChunks)) {
+    return [
+        'response' => null,
+        'context' => '',
+        'confidence' => 0.0,
+        'sources' => []
+    ];
+}
+```
+
+<Note>
+When no relevant context is found, the bot falls back to using [OpenAI Service](/services/openai-service) without RAG context, or displays a fallback message.
+</Note>
+
+### Successful Response
+
+```json
+{
+  "response": "Based on our documentation, you can reset your password by...",
+  "context": "Password Reset\n\nTo reset your password: 1. Click 'Forgot Password'...",
+  "confidence": 0.92,
+  "sources": [
+    {
+      "document": "user_guide.pdf",
+      "score": 0.92
+    },
+    {
+      "document": "faq.pdf",
+      "score": 0.85
+    }
+  ]
+}
+```
+
+## Error Handling
+
+```php
+try {
+    $result = $rag->generateResponse($messageData['text'], $systemPrompt);
+    
+    if ($result['response'] && $result['confidence'] >= 0.7) {
+        // Handle high-confidence response
+    } else {
+        // Handle low-confidence response
+    }
+} catch (\Exception $e) {
+    if (strpos($e->getMessage(), 'INSUFFICIENT_FUNDS') !== false) {
+        // Handle OpenAI quota exceeded
+        $db->query(
+            "INSERT INTO settings (setting_key, setting_value) 
+             VALUES ('openai_status', 'insufficient_funds') 
+             ON DUPLICATE KEY UPDATE setting_value = 'insufficient_funds'"
+        );
+    }
+    
+    $logger->error('RAG Error: ' . $e->getMessage());
+}
+```
+
+## Configuration
+
+Configure RAG behavior in `config/config.php`:
+
+```php config/config.php
+return [
+    'rag' => [
+        'similarity_method' => 'cosine',  // or 'euclidean'
+        'similarity_threshold' => 0.7,
+        'top_k' => 3,
+        'chunk_size' => 500,
+        'chunk_overlap' => 50
+    ]
+];
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Adjust topK Based on Document Count">
+    - **Small knowledge base (&lt;10 docs):** Use `topK = 3`
+    - **Medium knowledge base (10-50 docs):** Use `topK = 5`
+    - **Large knowledge base (&gt;50 docs):** Use `topK = 7-10`
+  </Accordion>
+  
+  <Accordion title="Set Appropriate Thresholds">
+    - **Strict accuracy (70-85%):** `threshold = 0.75`
+    - **Balanced (60-75%):** `threshold = 0.7` (default)
+    - **Broader recall (50-70%):** `threshold = 0.6`
+  </Accordion>
+  
+  <Accordion title="Optimize Chunk Size">
+    - **Technical docs:** 300-500 words with 50 word overlap
+    - **Conversational content:** 500-700 words with 100 word overlap
+    - **Short FAQs:** 200-300 words with 30 word overlap
+  </Accordion>
+  
+  <Accordion title="Enable Database Caching">
+    Always pass the `$db` parameter to enable embedding caching:
+    
+    ```php
+    $rag = new RAGService($openai, $vectorSearch, $logger, 3, 0.7, $db);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related Services
+
+<CardGroup cols={2}>
+  <Card title="OpenAI Service" icon="robot" href="/services/openai-service">
+    Handles embeddings and chat completions
+  </Card>
+  <Card title="Vector Search" icon="magnifying-glass" href="/services/vector-search">
+    Performs similarity search on embeddings
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Index Documents" icon="file-arrow-up" href="/api/documents/upload">
+    Learn how to upload and index documents
+  </Card>
+  <Card title="Tune Parameters" icon="sliders" href="/features/rag-system">
+    Optimize RAG performance for your use case
+  </Card>
+</CardGroup>

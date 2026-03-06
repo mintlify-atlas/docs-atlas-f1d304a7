@@ -1,0 +1,691 @@
+---
+title: WhatsApp Service
+description: Interface for WhatsApp Business API operations including messaging, media, and webhook handling
+icon: whatsapp
+---
+
+## Overview
+
+The `WhatsAppService` provides a complete interface for the WhatsApp Business Cloud API, handling message sending, media operations, webhook verification, and payload parsing.
+
+## Class Structure
+
+### Constructor
+
+```php
+public function __construct(
+    $accessToken,
+    $phoneNumberId,
+    $apiVersion,
+    Logger $logger
+)
+```
+
+<ParamField path="accessToken" type="string" required>
+  WhatsApp Business API access token
+</ParamField>
+
+<ParamField path="phoneNumberId" type="string" required>
+  WhatsApp Business phone number ID
+</ParamField>
+
+<ParamField path="apiVersion" type="string" required>
+  Graph API version (e.g., `v17.0`, `v18.0`)
+</ParamField>
+
+<ParamField path="logger" type="Logger" required>
+  Logger instance for tracking operations
+</ParamField>
+
+### Instantiation Example
+
+```php webhook.php
+if ($credentialService && $credentialService->hasWhatsAppCredentials()) {
+    $waCreds = $credentialService->getWhatsAppCredentials();
+    $whatsapp = new WhatsAppService(
+        $waCreds['access_token'],
+        $waCreds['phone_number_id'],
+        Config::get('whatsapp.api_version'),
+        $logger
+    );
+} else {
+    $whatsapp = new WhatsAppService(
+        Config::get('whatsapp.access_token'),
+        Config::get('whatsapp.phone_number_id'),
+        Config::get('whatsapp.api_version'),
+        $logger
+    );
+}
+```
+
+## Messaging Methods
+
+### sendMessage()
+
+Sends a text message to a WhatsApp user.
+
+```php
+public function sendMessage($to, $message)
+```
+
+<ParamField path="to" type="string" required>
+  Recipient's phone number in international format (e.g., `573001234567`)
+</ParamField>
+
+<ParamField path="message" type="string" required>
+  Text message content (supports markdown formatting)
+</ParamField>
+
+**Returns:** Message ID string or null
+
+#### Implementation
+
+```php
+try {
+    $response = $this->client->post($this->phoneNumberId . '/messages', [
+        'headers' => [
+            'Authorization' => 'Bearer ' . $this->accessToken,
+            'Content-Type' => 'application/json'
+        ],
+        'json' => [
+            'messaging_product' => 'whatsapp',
+            'to' => $to,
+            'type' => 'text',
+            'text' => [
+                'body' => $message
+            ]
+        ]
+    ]);
+
+    $data = json_decode($response->getBody()->getContents(), true);
+    
+    $this->logger->info('WhatsApp: Message sent', [
+        'to' => $to,
+        'message_id' => $data['messages'][0]['id'] ?? null
+    ]);
+
+    return $data['messages'][0]['id'] ?? null;
+} catch (\Exception $e) {
+    $this->logger->error('WhatsApp Send Error: ' . $e->getMessage());
+    throw $e;
+}
+```
+
+#### Usage Example
+
+```php webhook.php
+$response = $rag->generateResponse($messageData['text'], $systemPrompt);
+
+if ($response['response']) {
+    $messageId = $whatsapp->sendMessage(
+        $conversation['phone_number'],
+        $response['response']
+    );
+    
+    $logger->info('Response sent', ['message_id' => $messageId]);
+}
+```
+
+#### Markdown Formatting
+
+WhatsApp supports basic markdown in message text:
+
+```php
+$message = 
+    "*Bold text*\n" .
+    "_Italic text_\n" .
+    "~Strikethrough~\n" .
+    "`Monospace`\n" .
+    "```Code block```";
+
+$whatsapp->sendMessage($phoneNumber, $message);
+```
+
+### markAsRead()
+
+Marks an incoming message as read.
+
+```php
+public function markAsRead($messageId)
+```
+
+<ParamField path="messageId" type="string" required>
+  WhatsApp message ID to mark as read
+</ParamField>
+
+**Returns:** Boolean (true on success)
+
+#### Usage Example
+
+```php webhook.php
+if ($messageData['message_id']) {
+    $whatsapp->markAsRead($messageData['message_id']);
+}
+```
+
+<Note>
+Marking messages as read updates the read receipt in the WhatsApp conversation, improving user experience.
+</Note>
+
+## Media Methods
+
+### getMediaUrl()
+
+Retrieves the download URL for a media file.
+
+```php
+public function getMediaUrl($mediaId)
+```
+
+<ParamField path="mediaId" type="string" required>
+  WhatsApp media ID from incoming message
+</ParamField>
+
+**Returns:** Media URL string or null
+
+```php
+try {
+    $response = $this->client->get($mediaId, [
+        'headers' => [
+            'Authorization' => 'Bearer ' . $this->accessToken
+        ]
+    ]);
+
+    $mediaData = json_decode($response->getBody()->getContents(), true);
+    return $mediaData['url'] ?? null;
+} catch (\Exception $e) {
+    $this->logger->error('WhatsApp Get Media URL Error: ' . $e->getMessage());
+    throw $e;
+}
+```
+
+### downloadMedia()
+
+Downloads media file content.
+
+```php
+public function downloadMedia($mediaId)
+```
+
+<ParamField path="mediaId" type="string" required>
+  WhatsApp media ID from incoming message
+</ParamField>
+
+**Returns:** Binary file content as string
+
+#### Implementation
+
+```php
+try {
+    $mediaUrl = $this->getMediaUrl($mediaId);
+
+    if (!$mediaUrl) {
+        throw new \Exception('Media URL not found');
+    }
+
+    $fileResponse = $this->client->get($mediaUrl, [
+        'headers' => [
+            'Authorization' => 'Bearer ' . $this->accessToken
+        ]
+    ]);
+
+    return $fileResponse->getBody()->getContents();
+} catch (\Exception $e) {
+    $this->logger->error('WhatsApp Media Download Error: ' . $e->getMessage());
+    throw $e;
+}
+```
+
+#### Usage Example
+
+```php webhook.php
+if ($messageData['type'] === 'audio' && isset($messageData['audio_id'])) {
+    // Download audio file
+    $audioContent = $whatsapp->downloadMedia($messageData['audio_id']);
+    
+    // Save to disk
+    $audioFileName = uniqid('audio_') . '_' . time() . '.ogg';
+    $audioPath = $audioDir . '/' . $audioFileName;
+    file_put_contents($audioPath, $audioContent);
+    
+    // Transcribe with OpenAI Whisper
+    $transcription = $openai->transcribeAudio($audioContent, 'audio.ogg');
+    
+    $messageData['text'] = '[Audio] ' . $transcription;
+}
+```
+
+## Webhook Methods
+
+### verifyWebhook()
+
+Verifies webhook subscription requests from WhatsApp.
+
+```php
+public function verifyWebhook($mode, $token, $challenge, $verifyToken)
+```
+
+<ParamField path="mode" type="string" required>
+  Hub mode from `$_GET['hub_mode']`
+</ParamField>
+
+<ParamField path="token" type="string" required>
+  Hub verify token from `$_GET['hub_verify_token']`
+</ParamField>
+
+<ParamField path="challenge" type="string" required>
+  Hub challenge from `$_GET['hub_challenge']`
+</ParamField>
+
+<ParamField path="verifyToken" type="string" required>
+  Your configured verify token
+</ParamField>
+
+**Returns:** Challenge string if valid, false otherwise
+
+#### Usage Example
+
+```php webhook.php
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $mode = $_GET['hub_mode'] ?? '';
+    $token = $_GET['hub_verify_token'] ?? '';
+    $challenge = $_GET['hub_challenge'] ?? '';
+    
+    if ($credentialService && $credentialService->hasWhatsAppCredentials()) {
+        $waCreds = $credentialService->getWhatsAppCredentials();
+        $verifyToken = $waCreds['verify_token'];
+    } else {
+        $verifyToken = Config::get('whatsapp.verify_token');
+    }
+    
+    if ($mode === 'subscribe' && $token === $verifyToken) {
+        echo $challenge;
+        http_response_code(200);
+        exit;
+    }
+    
+    http_response_code(403);
+    exit;
+}
+```
+
+### parseWebhookPayload()
+
+Parses incoming webhook payloads into a structured format.
+
+```php
+public function parseWebhookPayload($payload)
+```
+
+<ParamField path="payload" type="array" required>
+  Decoded JSON webhook payload
+</ParamField>
+
+**Returns:** Structured message data array or null
+
+#### Supported Message Types
+
+<Tabs>
+  <Tab title="Text Message">
+    ```php
+    [
+        'from' => '573001234567',
+        'text' => 'Hello, I need help',
+        'message_id' => 'wamid.ABCxyz...',
+        'timestamp' => 1678901234,
+        'contact_name' => 'John Doe',
+        'type' => 'text'
+    ]
+    ```
+  </Tab>
+  
+  <Tab title="Audio Message">
+    ```php
+    [
+        'from' => '573001234567',
+        'text' => '',
+        'message_id' => 'wamid.ABCxyz...',
+        'timestamp' => 1678901234,
+        'contact_name' => 'John Doe',
+        'type' => 'audio',
+        'audio_id' => '1234567890',
+        'mime_type' => 'audio/ogg; codecs=opus'
+    ]
+    ```
+  </Tab>
+</Tabs>
+
+#### Implementation
+
+```php
+public function parseWebhookPayload($payload)
+{
+    if (!isset($payload['entry'][0]['changes'][0]['value'])) {
+        return null;
+    }
+
+    $value = $payload['entry'][0]['changes'][0]['value'];
+    
+    if (!isset($value['messages'][0])) {
+        return null;
+    }
+
+    $message = $value['messages'][0];
+    $messageType = $message['type'] ?? 'text';
+    
+    $data = [
+        'from' => $message['from'] ?? null,
+        'text' => '',
+        'message_id' => $message['id'] ?? null,
+        'timestamp' => $message['timestamp'] ?? time(),
+        'contact_name' => $value['contacts'][0]['profile']['name'] ?? 'Unknown',
+        'type' => $messageType
+    ];
+
+    if ($messageType === 'text') {
+        $data['text'] = $message['text']['body'] ?? '';
+    } elseif ($messageType === 'audio') {
+        $data['audio_id'] = $message['audio']['id'] ?? null;
+        $data['mime_type'] = $message['audio']['mime_type'] ?? 'audio/ogg';
+    }
+
+    return $data;
+}
+```
+
+#### Usage Example
+
+```php webhook.php
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $rawBody = file_get_contents('php://input');
+    $payload = json_decode($rawBody, true);
+    
+    $messageData = $whatsapp->parseWebhookPayload($payload);
+    
+    if (!$messageData) {
+        http_response_code(200);
+        echo json_encode(['status' => 'ignored']);
+        exit;
+    }
+    
+    $logger->info('Webhook received', [
+        'type' => $messageData['type'],
+        'from_hash' => substr(hash('sha256', $messageData['from'] ?? ''), 0, 12),
+        'timestamp' => $messageData['timestamp'] ?? time()
+    ]);
+    
+    // Process message...
+}
+```
+
+## Webhook Security
+
+### Signature Verification
+
+Validate webhook authenticity using HMAC-SHA256:
+
+```php webhook.php
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $rawBody = file_get_contents('php://input');
+    
+    if ($credentialService && $credentialService->hasWhatsAppCredentials()) {
+        $waCreds = $credentialService->getWhatsAppCredentials();
+        $appSecret = $waCreds['app_secret'];
+    } else {
+        $appSecret = Config::get('whatsapp.app_secret');
+    }
+    
+    if ($appSecret) {
+        $signature = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
+        $expected = 'sha256=' . hash_hmac('sha256', $rawBody, $appSecret);
+        
+        if (!hash_equals($expected, $signature)) {
+            http_response_code(401);
+            exit('Unauthorized');
+        }
+    } else {
+        $logger->warning('Webhook signature validation SKIPPED');
+    }
+    
+    $payload = json_decode($rawBody, true);
+    // Process payload...
+}
+```
+
+<Warning>
+Always validate webhook signatures in production to prevent spoofed requests:
+
+```php
+if (!$appSecret) {
+    throw new \Exception('App secret must be configured for webhook security');
+}
+```
+</Warning>
+
+## Message Type Handling
+
+### Unsupported Types
+
+```php webhook.php
+$unsupportedTypes = ['image', 'document', 'location', 'video', 'sticker', 'contacts'];
+
+if (in_array($messageData['type'], $unsupportedTypes)) {
+    $unsupportedMsg = 
+        "Lo siento, por el momento solo puedo procesar mensajes de *texto*. " .
+        "Por favor, envíame tu consulta en un mensaje de texto.";
+    
+    $whatsapp->sendMessage($messageData['from'], $unsupportedMsg);
+    
+    $conversationService->addMessage(
+        $conversation['id'],
+        'bot',
+        $unsupportedMsg,
+        null,
+        null,
+        1.0
+    );
+    
+    http_response_code(200);
+    echo json_encode(['status' => 'unsupported_media_type']);
+    exit;
+}
+```
+
+### Audio Handling
+
+See [Media Methods](#downloadmedia) above for audio processing example.
+
+## HTTP Client Configuration
+
+The service uses GuzzleHTTP configured for Facebook Graph API:
+
+```php
+$this->client = new Client([
+    'base_uri' => 'https://graph.facebook.com/' . $this->apiVersion . '/',
+    'timeout' => 30,
+    'verify' => false
+]);
+```
+
+<Warning>
+SSL verification is disabled. Enable it in production:
+
+```php
+'verify' => true
+```
+</Warning>
+
+## Configuration
+
+Configure WhatsApp settings in `config/config.php`:
+
+```php config/config.php
+return [
+    'whatsapp' => [
+        'access_token' => env('WHATSAPP_ACCESS_TOKEN'),
+        'phone_number_id' => env('WHATSAPP_PHONE_NUMBER_ID'),
+        'verify_token' => env('WHATSAPP_VERIFY_TOKEN'),
+        'app_secret' => env('WHATSAPP_APP_SECRET'),
+        'api_version' => env('WHATSAPP_API_VERSION', 'v17.0')
+    ]
+];
+```
+
+## Error Handling
+
+### Rate Limiting
+
+WhatsApp enforces rate limits. Handle 429 errors gracefully:
+
+```php
+try {
+    $whatsapp->sendMessage($to, $message);
+} catch (\GuzzleHttp\Exception\ClientException $e) {
+    if ($e->getResponse()->getStatusCode() === 429) {
+        $logger->warning('WhatsApp rate limit exceeded', ['to' => $to]);
+        
+        // Queue message for retry
+        $db->insert('message_queue', [
+            'phone_number' => $to,
+            'message' => $message,
+            'retry_after' => time() + 60
+        ]);
+    } else {
+        throw $e;
+    }
+}
+```
+
+### Failed Message Logging
+
+```php
+try {
+    $messageId = $whatsapp->sendMessage($to, $message);
+    if (!$messageId) {
+        $logger->error('Message sent but no ID returned', ['to' => $to]);
+    }
+} catch (\Exception $e) {
+    $logger->error('WhatsApp Send Error', [
+        'to' => $to,
+        'error' => $e->getMessage()
+    ]);
+    
+    // Store failed message for manual review
+    $db->insert('failed_messages', [
+        'phone_number' => $to,
+        'message' => $message,
+        'error' => $e->getMessage(),
+        'timestamp' => date('Y-m-d H:i:s')
+    ]);
+}
+```
+
+## Best Practices
+
+<AccordionGroup>
+  <Accordion title="Always Validate Webhook Signatures">
+    Configure `app_secret` and verify all incoming requests:
+    
+    ```php
+    if (!hash_equals($expected, $signature)) {
+        http_response_code(401);
+        exit('Unauthorized');
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Handle Duplicate Messages">
+    WhatsApp may send duplicate webhooks. Check message IDs:
+    
+    ```php
+    if ($messageData['message_id']) {
+        $existing = $db->fetchOne(
+            'SELECT id FROM messages WHERE message_id = :message_id',
+            [':message_id' => $messageData['message_id']]
+        );
+        
+        if ($existing) {
+            http_response_code(200);
+            echo json_encode(['status' => 'already_processed']);
+            exit;
+        }
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Mark Messages as Read">
+    Improves user experience:
+    
+    ```php
+    if ($messageData['message_id']) {
+        $whatsapp->markAsRead($messageData['message_id']);
+    }
+    ```
+  </Accordion>
+  
+  <Accordion title="Use Appropriate Timeouts">
+    Webhooks must respond within 20 seconds. Process heavy tasks asynchronously:
+    
+    ```php
+    // Respond immediately
+    http_response_code(200);
+    echo json_encode(['status' => 'received']);
+    
+    // Process in background
+    $db->insert('message_queue', [
+        'phone_number' => $messageData['from'],
+        'message' => $messageData['text'],
+        'status' => 'queued'
+    ]);
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Testing
+
+### Test Webhook Verification
+
+```bash
+curl -X GET "https://your-domain.com/webhook.php?hub.mode=subscribe&hub.verify_token=YOUR_VERIFY_TOKEN&hub.challenge=CHALLENGE_STRING"
+# Should return: CHALLENGE_STRING
+```
+
+### Test Message Sending
+
+```php
+$whatsapp = new WhatsAppService(
+    $accessToken,
+    $phoneNumberId,
+    'v17.0',
+    $logger
+);
+
+$messageId = $whatsapp->sendMessage(
+    '573001234567',
+    'Test message from bot'
+);
+
+echo "Message sent: {$messageId}\n";
+```
+
+## Related Services
+
+<CardGroup cols={2}>
+  <Card title="OpenAI Service" icon="robot" href="/services/openai-service">
+    Transcribes audio messages with Whisper
+  </Card>
+  <Card title="RAG Service" icon="brain" href="/services/rag-service">
+    Generates responses sent via WhatsApp
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Webhook Setup" icon="webhook" href="/api/webhook">
+    Configure WhatsApp webhook in Meta dashboard
+  </Card>
+  <Card title="Audio Messages" icon="microphone" href="/features/ai-conversations">
+    Enable audio message transcription
+  </Card>
+</CardGroup>

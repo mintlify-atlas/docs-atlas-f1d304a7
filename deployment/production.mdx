@@ -1,0 +1,601 @@
+---
+title: Production Deployment
+description: Deploy the WhatsApp RAG Bot to production environments like SiteGround, cPanel, or VPS
+---
+
+## Overview
+
+This guide covers deploying the WhatsApp RAG Bot to production servers. We'll focus on SiteGround deployment (as used by the project), but the principles apply to cPanel, VPS, and other hosting providers.
+
+<Warning>
+Before deploying to production, ensure you have:
+- Valid SSL certificate (required by Meta)
+- Backup of your database
+- Tested the application in development
+</Warning>
+
+## Deployment Methods
+
+<Tabs>
+  <Tab title="SiteGround (Recommended)">
+    The project includes a PowerShell script for automated SiteGround deployment.
+  </Tab>
+  <Tab title="cPanel">
+    Similar to SiteGround, using File Manager and phpMyAdmin.
+  </Tab>
+  <Tab title="VPS/Dedicated">
+    Full control with Apache/Nginx configuration.
+  </Tab>
+</Tabs>
+
+## SiteGround Deployment
+
+### Step 1: Prepare Deployment Package
+
+The project includes `prepare_for_siteground.ps1` for automated packaging.
+
+<Steps>
+  <Step title="Run the preparation script">
+    On your local machine (Windows PowerShell):
+    
+    ```powershell
+    .\prepare_for_siteground.ps1
+    ```
+    
+    This creates a ZIP file: `bot_whatsapp_siteground_YYYYMMDD_HHMMSS.zip`
+  </Step>
+  
+  <Step title="What gets included">
+    The script packages:
+    - ✅ `vendor/` - Composer dependencies
+    - ✅ `src/` - Application code
+    - ✅ `api/` - API endpoints
+    - ✅ `views/` - Admin panel templates
+    - ✅ `assets/` - CSS, JS, images
+    - ✅ `config/` - Configuration files
+    - ✅ `database/` - Schema SQL
+    - ✅ `workers/` - Background workers
+    - ✅ `index.php`, `webhook.php` - Entry points
+    - ✅ `.htaccess` - Apache configuration
+    - ✅ `composer.json` - Dependencies manifest
+    
+    <Accordion title="What does NOT get included?">
+    Excluded from deployment:
+    - ❌ `.env` (you'll create this on server)
+    - ❌ `logs/` (created empty)
+    - ❌ `uploads/` (created empty)
+    - ❌ `.git/` - Version control files
+    - ❌ `node_modules/` - Not needed
+    - ❌ Local development files
+    </Accordion>
+  </Step>
+  
+  <Step title="Verify package">
+    Check the created ZIP file size (typically 5-15 MB):
+    
+    ```powershell
+    # The script outputs:
+    # ZIP creado: bot_whatsapp_siteground_20260306_143022.zip (12.5 MB)
+    ```
+  </Step>
+</Steps>
+
+### Step 2: Upload to SiteGround
+
+<Steps>
+  <Step title="Access File Manager">
+    1. Log in to SiteGround Site Tools
+    2. Navigate to **Site > File Manager**
+    3. Go to `public_html/` directory
+  </Step>
+  
+  <Step title="Create subdirectory">
+    <Note>
+    The project is configured to run in `/whatsapp/` subdirectory.
+    </Note>
+    
+    ```bash
+    # Create directory
+    public_html/whatsapp/
+    ```
+    
+    Alternative: Deploy to root (`public_html/`) - requires updating `.htaccess`
+  </Step>
+  
+  <Step title="Upload ZIP file">
+    1. Navigate to `public_html/whatsapp/`
+    2. Click **Upload** button
+    3. Select `bot_whatsapp_siteground_*.zip`
+    4. Wait for upload to complete
+  </Step>
+  
+  <Step title="Extract the archive">
+    1. Right-click the ZIP file
+    2. Select **Extract**
+    3. Extract to current directory (`whatsapp/`)
+    4. Verify all files are in `public_html/whatsapp/`, not a nested folder
+    5. Delete the ZIP file after extraction
+  </Step>
+</Steps>
+
+### Step 3: Database Setup
+
+<Steps>
+  <Step title="Create MySQL database">
+    In SiteGround Site Tools:
+    
+    1. Go to **Site > MySQL > Databases**
+    2. Click **Create Database**
+    3. Name: `username_whatsapp_bot` (example)
+    4. Note the credentials
+  </Step>
+  
+  <Step title="Import schema">
+    1. Go to **Site > MySQL > phpMyAdmin**
+    2. Select your database
+    3. Click **Import** tab
+    4. Upload `database/schema.sql` from your local machine
+    5. Click **Go** to execute
+    
+    <Accordion title="Alternative: Import via File Manager">
+    If you extracted the ZIP, you can:
+    1. Navigate to `public_html/whatsapp/database/schema.sql` in phpMyAdmin
+    2. Copy the SQL content
+    3. Paste in SQL tab and execute
+    </Accordion>
+  </Step>
+  
+  <Step title="Verify tables">
+    In phpMyAdmin, check that 15+ tables were created:
+    - `documents`
+    - `vectors`
+    - `conversations`
+    - `messages`
+    - `settings`
+    - And more...
+  </Step>
+</Steps>
+
+### Step 4: Environment Configuration
+
+<Steps>
+  <Step title="Create .env file">
+    In File Manager, navigate to `public_html/whatsapp/` and create `.env`:
+    
+    ```bash .env
+    # Database Configuration
+    DB_HOST=localhost
+    DB_NAME=username_whatsapp_bot
+    DB_USER=username_dbuser
+    DB_PASSWORD=your_database_password
+    
+    # WhatsApp Business API
+    WHATSAPP_ACCESS_TOKEN=EAAxxxxxxxxxxxxx
+    WHATSAPP_PHONE_NUMBER_ID=123456789012345
+    WHATSAPP_VERIFY_TOKEN=your_custom_verify_token
+    WHATSAPP_APP_SECRET=your_app_secret_from_meta
+    
+    # OpenAI API
+    OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxx
+    OPENAI_MODEL=gpt-3.5-turbo
+    OPENAI_EMBEDDING_MODEL=text-embedding-ada-002
+    
+    # Application
+    APP_BASE_URL=https://yourdomain.com/whatsapp
+    APP_TIMEZONE=America/Bogota
+    APP_DEBUG=false
+    ```
+    
+    <Warning>
+    **Critical**: Set `APP_DEBUG=false` in production for security.
+    </Warning>
+  </Step>
+  
+  <Step title="Secure .env file">
+    Set file permissions via File Manager or SSH:
+    
+    ```bash
+    chmod 600 .env
+    ```
+    
+    The `.htaccess` already blocks direct access:
+    ```apache .htaccess
+    <Files ".env">
+        Order allow,deny
+        Deny from all
+    </Files>
+    ```
+  </Step>
+</Steps>
+
+### Step 5: File Permissions
+
+<Steps>
+  <Step title="Set directory permissions">
+    Via SSH or File Manager:
+    
+    ```bash
+    # Writable directories
+    chmod 755 logs/
+    chmod 755 uploads/
+    chmod 755 uploads/audios/
+    
+    # Application directories
+    chmod 755 vendor/
+    chmod 755 src/
+    chmod 755 api/
+    chmod 755 views/
+    chmod 755 assets/
+    
+    # Configuration
+    chmod 644 .htaccess
+    chmod 644 index.php
+    chmod 644 webhook.php
+    chmod 600 .env
+    ```
+  </Step>
+  
+  <Step title="Verify ownership">
+    Ensure files are owned by the web server user:
+    
+    ```bash
+    # Check current owner
+    ls -la
+    
+    # If needed, fix ownership (replace 'username' with your account)
+    chown -R username:username /home/username/public_html/whatsapp/
+    ```
+  </Step>
+</Steps>
+
+### Step 6: Apache Configuration
+
+The included `.htaccess` is pre-configured for subdirectory deployment.
+
+<Accordion title="View .htaccess configuration">
+```apache .htaccess
+RewriteEngine On
+RewriteBase /whatsapp/
+
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php [QSA,L]
+
+<IfModule mod_headers.c>
+    Header set X-Content-Type-Options "nosniff"
+    Header set X-Frame-Options "SAMEORIGIN"
+    Header set X-XSS-Protection "1; mode=block"
+    Header set X-Cache-Enabled "false"
+    Header set X-SG-Cache "nocache"
+</IfModule>
+
+<IfModule mod_php.c>
+    php_value upload_max_filesize 10M
+    php_value post_max_size 10M
+    php_value max_execution_time 60
+    php_value memory_limit 512M
+</IfModule>
+
+Options -Indexes
+
+<Files ".env">
+    Order allow,deny
+    Deny from all
+</Files>
+```
+
+**Key features**:
+- URL rewriting to `index.php`
+- Security headers
+- PHP limits for file uploads
+- Directory listing disabled
+- `.env` protection
+</Accordion>
+
+<Accordion title="Deploying to root (optional)">
+To deploy to `public_html/` instead of `/whatsapp/`:
+
+1. Change `.htaccess`:
+   ```apache
+   RewriteBase /
+   ```
+
+2. Update `.env`:
+   ```env
+   APP_BASE_URL=https://yourdomain.com
+   ```
+
+3. Update webhook URL in Meta console
+</Accordion>
+
+### Step 7: Configure WhatsApp Webhook
+
+<Steps>
+  <Step title="Get your webhook URL">
+    Your production webhook URL:
+    ```
+    https://yourdomain.com/whatsapp/webhook
+    ```
+    
+    <Note>
+    Must be HTTPS. HTTP is not supported by Meta.
+    </Note>
+  </Step>
+  
+  <Step title="Configure in Meta Developer Console">
+    1. Go to [developers.facebook.com](https://developers.facebook.com)
+    2. Open your WhatsApp Business app
+    3. Navigate to **WhatsApp > Configuration**
+    4. Under **Webhook**:
+       - Callback URL: `https://yourdomain.com/whatsapp/webhook`
+       - Verify Token: Same as `.env` `WHATSAPP_VERIFY_TOKEN`
+    5. Click **Verify and Save**
+  </Step>
+  
+  <Step title="Subscribe to events">
+    Subscribe to:
+    - ✅ `messages`
+    - ✅ `message_status` (optional)
+  </Step>
+  
+  <Step title="Test webhook">
+    Send a test message to your bot's phone number and verify:
+    - Message appears in admin panel
+    - Bot responds appropriately
+    - Check `logs/` for any errors
+  </Step>
+</Steps>
+
+## VPS/Dedicated Server Deployment
+
+<Accordion title="Nginx Configuration">
+```nginx nginx.conf
+server {
+    listen 80;
+    server_name yourdomain.com;
+    return 301 https://$server_name$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name yourdomain.com;
+    
+    root /var/www/whatsapp-rag-bot;
+    index index.php;
+    
+    ssl_certificate /etc/letsencrypt/live/yourdomain.com/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/yourdomain.com/privkey.pem;
+    
+    location / {
+        try_files $uri $uri/ /index.php?$query_string;
+    }
+    
+    location ~ \.php$ {
+        fastcgi_pass unix:/var/run/php/php7.4-fpm.sock;
+        fastcgi_index index.php;
+        fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
+        include fastcgi_params;
+    }
+    
+    location ~ /\.env {
+        deny all;
+    }
+    
+    location ~ /\. {
+        deny all;
+    }
+    
+    client_max_body_size 10M;
+}
+```
+</Accordion>
+
+<Accordion title="Apache Virtual Host">
+```apache apache-vhost.conf
+<VirtualHost *:80>
+    ServerName yourdomain.com
+    Redirect permanent / https://yourdomain.com/
+</VirtualHost>
+
+<VirtualHost *:443>
+    ServerName yourdomain.com
+    DocumentRoot /var/www/whatsapp-rag-bot
+    
+    SSLEngine on
+    SSLCertificateFile /etc/letsencrypt/live/yourdomain.com/fullchain.pem
+    SSLCertificateKeyFile /etc/letsencrypt/live/yourdomain.com/privkey.pem
+    
+    <Directory /var/www/whatsapp-rag-bot>
+        AllowOverride All
+        Require all granted
+    </Directory>
+    
+    ErrorLog ${APACHE_LOG_DIR}/whatsapp-bot-error.log
+    CustomLog ${APACHE_LOG_DIR}/whatsapp-bot-access.log combined
+</VirtualHost>
+```
+</Accordion>
+
+## Post-Deployment Checklist
+
+<Steps>
+  <Step title="Verify application access">
+    ```bash
+    # Test admin panel
+    curl https://yourdomain.com/whatsapp/
+    
+    # Should return HTML, not 404/500 error
+    ```
+  </Step>
+  
+  <Step title="Test webhook verification">
+    ```bash
+    curl "https://yourdomain.com/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=your_token&hub.challenge=test"
+    
+    # Should return: test
+    ```
+  </Step>
+  
+  <Step title="Check logs directory">
+    ```bash
+    # Verify logs are being written
+    ls -lh public_html/whatsapp/logs/
+    
+    # View latest log
+    tail -50 public_html/whatsapp/logs/$(date +%Y-%m-%d).log
+    ```
+  </Step>
+  
+  <Step title="Test end-to-end">
+    1. Send WhatsApp message to bot
+    2. Verify webhook receives message (check logs)
+    3. Confirm bot responds
+    4. Check message appears in admin panel
+  </Step>
+  
+  <Step title="Security check">
+    ```bash
+    # Verify .env is not accessible
+    curl https://yourdomain.com/whatsapp/.env
+    # Should return 403 Forbidden
+    
+    # Verify directory listing is disabled
+    curl https://yourdomain.com/whatsapp/logs/
+    # Should return 403 Forbidden
+    ```
+  </Step>
+</Steps>
+
+## Production Optimization
+
+### Enable OPcache
+
+<CodeGroup>
+```ini php.ini
+[opcache]
+opcache.enable=1
+opcache.memory_consumption=128
+opcache.interned_strings_buffer=8
+opcache.max_accelerated_files=10000
+opcache.revalidate_freq=2
+opcache.fast_shutdown=1
+```
+
+```bash Verify OPcache
+php -i | grep opcache
+```
+</CodeGroup>
+
+### Database Optimization
+
+```sql
+-- Add indexes for performance
+CREATE INDEX idx_vectors_document ON vectors(document_id);
+CREATE INDEX idx_messages_conversation ON messages(conversation_id);
+CREATE INDEX idx_messages_created ON messages(created_at);
+
+-- Optimize tables
+OPTIMIZE TABLE vectors;
+OPTIMIZE TABLE messages;
+```
+
+### Log Rotation
+
+Set up automated log rotation:
+
+```bash crontab
+# Rotate logs daily, keep 30 days
+0 0 * * * find /path/to/whatsapp/logs -name '*.log' -mtime +30 -delete
+```
+
+## Backup Strategy
+
+<Steps>
+  <Step title="Database backups">
+    ```bash
+    # Daily automated backup
+    mysqldump -u username -p whatsapp_rag_bot > backup_$(date +%Y%m%d).sql
+    ```
+  </Step>
+  
+  <Step title="File backups">
+    ```bash
+    # Backup uploaded documents and configuration
+    tar -czf backup_files_$(date +%Y%m%d).tar.gz \
+      uploads/ \
+      .env \
+      config/
+    ```
+  </Step>
+  
+  <Step title="Automated backups">
+    Configure SiteGround automatic backups or use cron:
+    ```bash
+    # Daily backup at 2 AM
+    0 2 * * * /path/to/backup_script.sh
+    ```
+  </Step>
+</Steps>
+
+## Monitoring
+
+### Log Monitoring
+
+```bash
+# Watch for errors in real-time
+tail -f logs/$(date +%Y-%m-%d).log | grep ERROR
+
+# Count errors today
+grep ERROR logs/$(date +%Y-%m-%d).log | wc -l
+```
+
+### Health Check Endpoint
+
+Create a simple health check:
+
+```php api/health.php
+<?php
+require_once __DIR__ . '/../vendor/autoload.php';
+
+use App\Core\Database;
+use App\Core\Config;
+
+try {
+    Config::load(__DIR__ . '/../config/config.php');
+    $db = Database::getInstance(Config::get('database'));
+    $db->query('SELECT 1', []);
+    
+    echo json_encode(['status' => 'healthy']);
+} catch (Exception $e) {
+    http_response_code(500);
+    echo json_encode(['status' => 'unhealthy', 'error' => $e->getMessage()]);
+}
+```
+
+Monitor with:
+```bash
+curl https://yourdomain.com/whatsapp/api/health
+```
+
+## Troubleshooting
+
+<CardGroup cols={2}>
+  <Card title="Webhook Issues" icon="plug" href="/deployment/troubleshooting#webhook-problems">
+    Verification failures, signature errors
+  </Card>
+  <Card title="Database Errors" icon="database" href="/deployment/troubleshooting#database-issues">
+    Connection problems, permission issues
+  </Card>
+  <Card title="File Permissions" icon="lock" href="/deployment/troubleshooting#permission-errors">
+    Upload failures, log write errors
+  </Card>
+  <Card title="API Errors" icon="triangle-exclamation" href="/deployment/troubleshooting#api-issues">
+    OpenAI quota, WhatsApp limits
+  </Card>
+</CardGroup>
+
+## Next Steps
+
+<Card title="Troubleshooting Guide" icon="wrench" href="/deployment/troubleshooting">
+  Resolve common deployment and runtime issues
+</Card>

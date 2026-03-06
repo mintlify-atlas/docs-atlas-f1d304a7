@@ -1,0 +1,584 @@
+---
+title: Conversation Management
+description: Dashboard for tracking, monitoring, and managing WhatsApp conversations with human handoff support
+icon: messages
+---
+
+## Overview
+
+The conversation management system provides a comprehensive dashboard for viewing all WhatsApp interactions, monitoring bot performance, and handling human escalations. Track conversation history, confidence scores, and user engagement in real-time.
+
+## Conversation Service
+
+Core service for managing conversation data:
+
+### Create or Retrieve Conversation
+
+```php src/Services/ConversationService.php
+public function getOrCreateConversation($phoneNumber, $contactName = null)
+{
+    $conversation = $this->db->fetchOne(
+        'SELECT * FROM conversations WHERE phone_number = :phone',
+        [':phone' => $phoneNumber]
+    );
+
+    if ($conversation) {
+        // Update last activity timestamp
+        $this->db->update(
+            'conversations',
+            ['last_message_at' => date('Y-m-d H:i:s')],
+            'id = :id',
+            [':id' => $conversation['id']]
+        );
+        return $conversation;
+    }
+
+    // Create new conversation
+    $id = $this->db->insert('conversations', [
+        'phone_number' => $phoneNumber,
+        'contact_name' => $contactName,
+        'status' => 'active',
+        'ai_enabled' => 1
+    ]);
+
+    return $this->db->fetchOne(
+        'SELECT * FROM conversations WHERE id = :id',
+        [':id' => $id]
+    );
+}
+```
+
+### Add Message
+
+```php src/Services/ConversationService.php
+public function addMessage($conversationId, $senderType, $messageText, 
+                           $messageId = null, $contextUsed = null, 
+                           $confidenceScore = null, $audioUrl = null, $mediaType = 'text')
+{
+    $this->db->query(
+        'INSERT INTO messages (conversation_id, message_id, sender_type, message_text, 
+                               audio_url, media_type, context_used, confidence_score) 
+         VALUES (:conversation_id, :message_id, :sender_type, :message_text, 
+                 :audio_url, :media_type, :context_used, :confidence_score)',
+        [
+            ':conversation_id' => $conversationId,
+            ':message_id' => $messageId,
+            ':sender_type' => $senderType,  // 'user' or 'bot'
+            ':message_text' => $messageText,
+            ':audio_url' => $audioUrl,
+            ':media_type' => $mediaType,
+            ':context_used' => $contextUsed,      // RAG context if applicable
+            ':confidence_score' => $confidenceScore  // RAG confidence
+        ]
+    );
+    
+    return $this->db->lastInsertId();
+}
+```
+
+### Get Conversation History
+
+```php src/Services/ConversationService.php
+public function getConversationHistory($conversationId, $limit = 50)
+{
+    $limit = (int) $limit;
+    return $this->db->fetchAll(
+        "SELECT * FROM messages 
+         WHERE conversation_id = :id 
+         ORDER BY created_at DESC 
+         LIMIT {$limit}",
+        [':id' => $conversationId]
+    );
+}
+```
+
+### List All Conversations
+
+```php src/Services/ConversationService.php
+public function getAllConversations($status = null, $limit = 100)
+{
+    $limit = (int) $limit;
+    $baseQuery = "SELECT c.*,
+        m.message_text AS last_message,
+        m.sender_type  AS last_sender_type,
+        m.created_at   AS last_message_created_at
+        FROM conversations c
+        LEFT JOIN messages m ON m.id = (
+            SELECT id FROM messages
+            WHERE conversation_id = c.id
+            ORDER BY created_at DESC
+            LIMIT 1
+        )";
+
+    if ($status) {
+        return $this->db->fetchAll(
+            $baseQuery . " WHERE c.status = :status ORDER BY c.last_message_at DESC LIMIT {$limit}",
+            [':status' => $status]
+        );
+    }
+
+    return $this->db->fetchAll(
+        $baseQuery . " ORDER BY c.last_message_at DESC LIMIT {$limit}",
+        []
+    );
+}
+```
+
+### Get Statistics
+
+```php src/Services/ConversationService.php
+public function getConversationStats()
+{
+    $stats = [];
+    
+    $stats['total'] = $this->db->fetchOne(
+        'SELECT COUNT(*) as count FROM conversations'
+    )['count'] ?? 0;
+    
+    $stats['active'] = $this->db->fetchOne(
+        "SELECT COUNT(*) as count FROM conversations WHERE status = 'active'"
+    )['count'] ?? 0;
+    
+    $stats['pending_human'] = $this->db->fetchOne(
+        "SELECT COUNT(*) as count FROM conversations WHERE status = 'pending_human'"
+    )['count'] ?? 0;
+    
+    $stats['total_messages'] = $this->db->fetchOne(
+        'SELECT COUNT(*) as count FROM messages'
+    )['count'] ?? 0;
+    
+    return $stats;
+}
+```
+
+## Conversation Statuses
+
+<Tabs>
+  <Tab title="Active">
+    Normal conversations with AI enabled:
+    
+    ```php
+    [
+        'status' => 'active',
+        'ai_enabled' => 1
+    ]
+    ```
+    
+    - Bot responds automatically
+    - RAG and OpenAI processing active
+    - Default state for new conversations
+  </Tab>
+  
+  <Tab title="Pending Human">
+    User requested human assistance:
+    
+    ```php
+    [
+        'status' => 'pending_human',
+        'ai_enabled' => 0
+    ]
+    ```
+    
+    - Bot stops responding
+    - Conversation highlighted in dashboard
+    - Awaits human intervention
+  </Tab>
+  
+  <Tab title="Resolved">
+    Conversation closed:
+    
+    ```php
+    [
+        'status' => 'resolved'
+    ]
+    ```
+    
+    - Issue resolved or conversation ended
+    - Can be reactivated if user messages again
+    - Archived in dashboard
+  </Tab>
+</Tabs>
+
+## Dashboard Interface
+
+The conversation dashboard provides a WhatsApp-style interface:
+
+### Layout Structure
+
+```php views/conversations.php
+<div style="display:flex;gap:1rem;height:calc(100vh - 120px);">
+  <!-- Conversation List Panel -->
+  <div id="list-panel" class="conv-panel" style="width:320px;">
+    <!-- Search + Filters -->
+    <div style="padding:0.75rem;border-bottom:1px solid var(--border-color);">
+      <div style="display:flex;gap:0.375rem;">
+        <button class="conv-filter-btn active" id="filter-all" 
+                onclick="filterConversations('all')">Todas</button>
+        <button class="conv-filter-btn" id="filter-active" 
+                onclick="filterConversations('active')">Activas</button>
+        <button class="conv-filter-btn" id="filter-pending" 
+                onclick="filterConversations('pending_human')">Pendientes</button>
+      </div>
+      <input type="text" id="search-conversations"
+             placeholder="Buscar por nombre o número…">
+    </div>
+    
+    <!-- Conversations List -->
+    <div id="conversations-list" style="flex:1;overflow-y:auto;">
+      <!-- Populated via AJAX -->
+    </div>
+  </div>
+  
+  <!-- Chat Panel -->
+  <div id="chat-panel" class="conv-panel" style="flex:1;">
+    <!-- Chat Header -->
+    <div id="chat-header" style="padding:0.875rem;display:flex;align-items:center;">
+      <div class="avatar avatar-md" id="chat-avatar">?</div>
+      <div style="flex:1;">
+        <div id="chat-contact-name"></div>
+        <div id="chat-contact-phone"></div>
+      </div>
+      <!-- AI Toggle -->
+      <div style="display:flex;align-items:center;gap:0.5rem;">
+        <span>IA Bot</span>
+        <label class="toggle">
+          <input type="checkbox" id="ai-toggle" onchange="toggleAI()">
+          <span class="toggle-thumb"></span>
+        </label>
+      </div>
+    </div>
+    
+    <!-- Messages Area -->
+    <div id="chat-messages" class="chat-container" style="flex:1;overflow-y:auto;">
+      <button id="load-more-btn" onclick="loadMoreMessages()">
+        Cargar mensajes anteriores
+      </button>
+      <div id="messages-content">
+        <!-- Messages populated via AJAX -->
+      </div>
+    </div>
+    
+    <!-- Reply Input -->
+    <div id="chat-input" style="padding:0.875rem;">
+      <div style="display:flex;gap:0.625rem;">
+        <textarea id="reply-input"
+                  placeholder="Escribe tu respuesta…"
+                  rows="1"></textarea>
+        <button id="send-btn" onclick="sendReply()">
+          Enviar
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+```
+
+### Mobile Responsive
+
+```javascript views/conversations.php
+// Mobile: toggle between list and chat panels
+window.viewConversation = function(id, name, phone) {
+    // Load conversation...
+    
+    if (window.innerWidth < 768) {
+        document.getElementById('list-panel').classList.add('mobile-hidden');
+        document.getElementById('chat-panel').classList.add('mobile-open');
+    }
+};
+
+window.closeChat = function() {
+    if (window.innerWidth < 768) {
+        document.getElementById('list-panel').classList.remove('mobile-hidden');
+        document.getElementById('chat-panel').classList.remove('mobile-open');
+    }
+};
+```
+
+## Human Handoff
+
+Users can request human assistance at any time:
+
+### Trigger Keywords
+
+```php webhook.php
+$humanKeywords = [
+    'hablar con humano', 
+    'hablar con una persona', 
+    'hablar con operador', 
+    'quiero un humano', 
+    'atención humana', 
+    'operador', 
+    'agente humano',
+    'hablar con alguien', 
+    'persona real', 
+    'representante'
+];
+
+$messageLower = mb_strtolower($messageData['text']);
+$isRequestingHuman = false;
+
+foreach ($humanKeywords as $keyword) {
+    if (strpos($messageLower, $keyword) !== false) {
+        $isRequestingHuman = true;
+        break;
+    }
+}
+```
+
+### Handoff Process
+
+<Steps>
+  <Step title="User triggers keyword">
+    User message contains a human handoff keyword
+  </Step>
+  
+  <Step title="Send confirmation">
+    Bot acknowledges the request:
+    
+    ```php webhook.php
+    if ($isRequestingHuman) {
+        $humanMessage = 'Enseguida te comunico con alguien de nuestro equipo.';
+        $whatsapp->sendMessage($messageData['from'], $humanMessage);
+        
+        $conversationService->addMessage(
+            $conversation['id'],
+            'bot',
+            $humanMessage,
+            null,
+            null,
+            1.0
+        );
+    ```
+  </Step>
+  
+  <Step title="Update conversation status">
+    Set status to pending and disable AI:
+    
+    ```php webhook.php
+        $conversationService->updateConversationStatus(
+            $conversation['id'], 
+            'pending_human'
+        );
+        
+        $db->query(
+            'UPDATE conversations SET ai_enabled = 0 WHERE id = :id',
+            [':id' => $conversation['id']]
+        );
+        
+        $logger->info('User requested human intervention', [
+            'conversation_id' => $conversation['id']
+        ]);
+        
+        exit;
+    }
+    ```
+  </Step>
+  
+  <Step title="Human responds via dashboard">
+    Agent views conversation in "Pendientes" tab and replies through the interface
+  </Step>
+  
+  <Step title="Reactivate if needed">
+    Human can toggle AI back on from the dashboard
+  </Step>
+</Steps>
+
+## Message Types
+
+The system tracks different message types:
+
+<CardGroup cols={2}>
+  <Card title="Text Messages" icon="message">
+    Standard text responses from users and bot
+  </Card>
+  <Card title="Audio Messages" icon="microphone">
+    Voice messages with Whisper transcription
+  </Card>
+  <Card title="System Messages" icon="info-circle">
+    Status updates and notifications
+  </Card>
+  <Card title="Human Replies" icon="user">
+    Messages sent by agents from dashboard
+  </Card>
+</CardGroup>
+
+### Message Metadata
+
+```sql
+CREATE TABLE messages (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    conversation_id INT NOT NULL,
+    message_id VARCHAR(255),          -- WhatsApp message ID
+    sender_type ENUM('user', 'bot') NOT NULL,
+    message_text TEXT NOT NULL,
+    audio_url VARCHAR(500),           -- For voice messages
+    media_type VARCHAR(50) DEFAULT 'text',
+    context_used TEXT,                -- RAG context if applicable
+    confidence_score DECIMAL(3,2),    -- RAG confidence (0-1)
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id)
+);
+```
+
+## Conversation Tracking
+
+Webhook updates conversation state with each message:
+
+```php webhook.php
+// Update conversation activity
+$conversation = $conversationService->getOrCreateConversation(
+    $messageData['from'],
+    $messageData['contact_name']
+);
+
+// Add user message
+$conversationService->addMessage(
+    $conversation['id'],
+    'user',
+    $messageData['text'],
+    $messageData['message_id'],
+    null,
+    null,
+    $messageData['audio_url'] ?? null,
+    $messageData['type']
+);
+
+// Update last message timestamp
+$db->query(
+    'UPDATE conversations SET last_message_at = NOW() WHERE id = :id',
+    [':id' => $conversation['id']]
+);
+
+// Process message and get bot response...
+
+// Add bot response
+$conversationService->addMessage(
+    $conversation['id'],
+    'bot',
+    $result['response'],
+    null,
+    $result['context'],        // RAG context
+    $result['confidence']       // RAG confidence score
+);
+
+// Update last bot message timestamp
+$db->query(
+    'UPDATE conversations SET last_bot_message_at = NOW() WHERE id = :id',
+    [':id' => $conversation['id']]
+);
+```
+
+## Deduplication
+
+Prevents duplicate processing of webhook events:
+
+```php webhook.php
+if ($messageData['message_id']) {
+    $existingMessage = $db->fetchOne(
+        'SELECT id FROM messages WHERE message_id = :message_id',
+        [':message_id' => $messageData['message_id']]
+    );
+    
+    if ($existingMessage) {
+        $logger->info('Message already processed, skipping', [
+            'message_id' => $messageData['message_id']
+        ]);
+        http_response_code(200);
+        echo json_encode(['status' => 'already_processed']);
+        exit;
+    }
+}
+```
+
+## Performance Metrics
+
+Track conversation and message statistics:
+
+### Summary Statistics
+
+```php
+$stats = $conversationService->getConversationStats();
+
+[
+    'total' => 150,              // Total conversations
+    'active' => 120,             // AI-enabled conversations
+    'pending_human' => 25,       // Awaiting human response
+    'total_messages' => 3450     // All messages across conversations
+]
+```
+
+### Message Analysis
+
+- **Confidence scores**: Track RAG performance per message
+- **Response time**: Monitor bot latency
+- **Human handoff rate**: Percentage requiring escalation
+- **Resolution time**: Time from first message to closure
+
+## Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Regular Monitoring" icon="eye">
+    Check pending_human conversations daily
+  </Card>
+  <Card title="Quick Responses" icon="bolt">
+    Respond to escalations within business hours
+  </Card>
+  <Card title="Confidence Tracking" icon="chart-line">
+    Monitor low-confidence responses to improve RAG
+  </Card>
+  <Card title="Context Review" icon="book">
+    Examine context_used to validate document relevance
+  </Card>
+</CardGroup>
+
+<Warning>
+**Privacy considerations:**
+- Phone numbers are stored for conversation tracking
+- Messages contain user data - follow privacy regulations
+- Consider data retention policies for old conversations
+- Implement access controls for dashboard users
+</Warning>
+
+## Database Schema
+
+```sql
+CREATE TABLE conversations (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    phone_number VARCHAR(20) UNIQUE NOT NULL,
+    contact_name VARCHAR(255),
+    status ENUM('active', 'pending_human', 'resolved') DEFAULT 'active',
+    ai_enabled TINYINT DEFAULT 1,
+    last_message_at TIMESTAMP,
+    last_bot_message_at TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_status (status),
+    INDEX idx_last_message (last_message_at)
+);
+
+CREATE TABLE messages (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    conversation_id INT NOT NULL,
+    message_id VARCHAR(255),
+    sender_type ENUM('user', 'bot') NOT NULL,
+    message_text TEXT NOT NULL,
+    audio_url VARCHAR(500),
+    media_type VARCHAR(50) DEFAULT 'text',
+    context_used TEXT,
+    confidence_score DECIMAL(3,2),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (conversation_id) REFERENCES conversations(id),
+    INDEX idx_conversation (conversation_id),
+    INDEX idx_created (created_at)
+);
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Dashboard Access" icon="laptop" href="/installation">
+    Access the conversation dashboard
+  </Card>
+  <Card title="WhatsApp Setup" icon="whatsapp" href="/configuration/whatsapp-setup">
+    Configure WhatsApp webhook
+  </Card>
+</CardGroup>

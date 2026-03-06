@@ -1,0 +1,125 @@
+---
+title: "Get Settings"
+api: "GET /api/get-settings.php"
+description: "Retrieve all bot configuration settings"
+---
+
+## Overview
+
+Retrieves all general bot settings including system prompts, welcome messages, bot mode, and calendar integration status.
+
+## Request
+
+No parameters required for this endpoint.
+
+<CodeGroup>
+```bash cURL
+curl https://your-domain.com/api/get-settings.php
+```
+
+```javascript JavaScript
+const response = await fetch('/api/get-settings.php');
+const data = await response.json();
+console.log(data.settings);
+```
+
+```php PHP
+$response = file_get_contents('https://your-domain.com/api/get-settings.php');
+$data = json_decode($response, true);
+```
+</CodeGroup>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the request was successful
+</ResponseField>
+
+<ResponseField name="settings" type="object" required>
+  Contains all configuration settings
+  
+  <ResponseField name="systemPrompt" type="string">
+    The AI system prompt that defines the bot's behavior
+    
+    Default: `"Eres un asistente virtual útil y amigable."`
+  </ResponseField>
+  
+  <ResponseField name="welcomeMessage" type="string">
+    Message sent when a user first contacts the bot
+    
+    Default: `"Hola! Soy un asistente virtual. ¿En qué puedo ayudarte?"`
+  </ResponseField>
+  
+  <ResponseField name="errorMessage" type="string">
+    Fallback message when no relevant information is found
+    
+    Default: `"Lo siento, no encontré información relevante. Un operador te atenderá pronto."`
+  </ResponseField>
+  
+  <ResponseField name="contextMessagesCount" type="integer">
+    Number of previous messages to include in conversation context
+    
+    Default: `5`
+  </ResponseField>
+  
+  <ResponseField name="calendarEnabled" type="boolean">
+    Whether calendar integration is enabled
+    
+    Default: `false`
+  </ResponseField>
+  
+  <ResponseField name="botMode" type="string">
+    Operating mode of the bot: `"ai"` (RAG mode) or `"classic"` (flow-based)
+    
+    Default: `"ai"`
+  </ResponseField>
+  
+  <ResponseField name="botName" type="string">
+    Display name of the bot
+    
+    Default: `"WhatsApp Bot"`
+  </ResponseField>
+</ResponseField>
+
+### Success Response Example
+
+```json
+{
+  "success": true,
+  "settings": {
+    "systemPrompt": "Eres un asistente virtual útil y amigable.",
+    "welcomeMessage": "Hola! Soy un asistente virtual. ¿En qué puedo ayudarte?",
+    "errorMessage": "Lo siento, no encontré información relevante. Un operador te atenderá pronto.",
+    "contextMessagesCount": 5,
+    "calendarEnabled": false,
+    "botMode": "ai",
+    "botName": "WhatsApp Bot"
+  }
+}
+```
+
+### Error Response Example
+
+```json
+{
+  "success": false,
+  "error": "Error al obtener configuración"
+}
+```
+
+## Error Handling
+
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Settings retrieved successfully |
+| 500 | Internal server error |
+
+## Implementation Details
+
+The endpoint:
+1. Queries the `settings` table for all configuration key-value pairs
+2. Maps database keys to JSON response keys
+3. Returns default values if settings are not configured
+4. Converts string booleans to actual boolean types
+
+Source: `api/get-settings.php:9-48`

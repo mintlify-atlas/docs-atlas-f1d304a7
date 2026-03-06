@@ -1,122 +1,153 @@
 {
   "$schema": "https://mintlify.com/docs.json",
-  "theme": "mint",
-  "name": "Mint Starter Kit",
+  "name": "WhatsApp RAG Bot",
+  "theme": "palm",
   "colors": {
-    "primary": "#16A34A",
-    "light": "#07C983",
-    "dark": "#15803D"
+    "primary": "#25D366",
+    "light": "#128C7E",
+    "dark": "#075E54"
   },
-  "favicon": "/favicon.svg",
+  "navbar": {
+    "primary": {
+      "type": "github",
+      "href": "https://github.com/JorgeForero02/Bot-whatsapp-php"
+    }
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/JorgeForero02/Bot-whatsapp-php"
+    }
+  },
   "navigation": {
     "tabs": [
       {
-        "tab": "Guides",
+        "tab": "Documentation",
         "groups": [
           {
-            "group": "Getting started",
+            "group": "Get Started",
             "pages": [
-              "index",
+              "introduction",
               "quickstart",
-              "development"
+              "installation"
             ]
           },
           {
-            "group": "Customization",
+            "group": "Core Features",
             "pages": [
-              "essentials/settings",
-              "essentials/navigation"
+              "features/rag-system",
+              "features/ai-conversations",
+              "features/calendar-integration",
+              "features/flow-builder",
+              "features/conversation-management"
             ]
           },
           {
-            "group": "Writing content",
+            "group": "Configuration",
             "pages": [
-              "essentials/markdown",
-              "essentials/code",
-              "essentials/images",
-              "essentials/reusable-snippets"
+              "configuration/credentials",
+              "configuration/whatsapp-setup",
+              "configuration/openai-setup",
+              "configuration/google-calendar",
+              "configuration/system-settings"
             ]
           },
           {
-            "group": "AI tools",
+            "group": "Deployment",
             "pages": [
-              "ai-tools/cursor",
-              "ai-tools/claude-code",
-              "ai-tools/windsurf"
+              "deployment/requirements",
+              "deployment/local-development",
+              "deployment/production",
+              "deployment/troubleshooting"
             ]
           }
         ]
       },
       {
-        "tab": "API reference",
+        "tab": "API Reference",
         "groups": [
           {
-            "group": "API documentation",
+            "group": "Webhook",
             "pages": [
-              "api-reference/introduction"
+              "api/webhook"
             ]
           },
           {
-            "group": "Endpoint examples",
+            "group": "Conversations",
             "pages": [
-              "api-reference/endpoint/get",
-              "api-reference/endpoint/create",
-              "api-reference/endpoint/delete",
-              "api-reference/endpoint/webhook"
+              "api/conversations/get-conversations",
+              "api/conversations/get-messages",
+              "api/conversations/reply",
+              "api/conversations/toggle-ai"
+            ]
+          },
+          {
+            "group": "Documents",
+            "pages": [
+              "api/documents/upload",
+              "api/documents/get-documents",
+              "api/documents/delete",
+              "api/documents/get-content"
+            ]
+          },
+          {
+            "group": "Settings",
+            "pages": [
+              "api/settings/get-settings",
+              "api/settings/save-settings",
+              "api/settings/credentials",
+              "api/settings/calendar"
+            ]
+          },
+          {
+            "group": "Flows",
+            "pages": [
+              "api/flows/get-flows",
+              "api/flows/save-flow",
+              "api/flows/delete-flow",
+              "api/flows/simulate"
+            ]
+          },
+          {
+            "group": "System",
+            "pages": [
+              "api/system/health",
+              "api/system/stats",
+              "api/system/check-updates"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Services",
+        "groups": [
+          {
+            "group": "Core Services",
+            "pages": [
+              "services/rag-service",
+              "services/openai-service",
+              "services/whatsapp-service",
+              "services/vector-search"
+            ]
+          },
+          {
+            "group": "Business Logic",
+            "pages": [
+              "services/conversation-service",
+              "services/document-service",
+              "services/calendar-service",
+              "services/flow-builder-service"
+            ]
+          },
+          {
+            "group": "Infrastructure",
+            "pages": [
+              "services/database",
+              "services/encryption",
+              "services/logger"
             ]
           }
         ]
       }
-    ],
-    "global": {
-      "anchors": [
-        {
-          "anchor": "Documentation",
-          "href": "https://mintlify.com/docs",
-          "icon": "book-open-cover"
-        },
-        {
-          "anchor": "Blog",
-          "href": "https://mintlify.com/blog",
-          "icon": "newspaper"
-        }
-      ]
-    }
-  },
-  "logo": {
-    "light": "/logo/light.svg",
-    "dark": "/logo/dark.svg"
-  },
-  "navbar": {
-    "links": [
-      {
-        "label": "Support",
-        "href": "mailto:hi@mintlify.com"
-      }
-    ],
-    "primary": {
-      "type": "button",
-      "label": "Dashboard",
-      "href": "https://dashboard.mintlify.com"
-    }
-  },
-  "contextual": {
-    "options": [
-     "copy",
-     "view",
-     "chatgpt",
-     "claude",
-     "perplexity",
-     "mcp",
-     "cursor",
-     "vscode"
-   ]
-  },
-  "footer": {
-    "socials": {
-      "x": "https://x.com/mintlify",
-      "github": "https://github.com/mintlify",
-      "linkedin": "https://linkedin.com/company/mintlify"
-    }
+    ]
   }
 }

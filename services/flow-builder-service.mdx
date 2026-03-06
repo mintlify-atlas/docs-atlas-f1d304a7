@@ -1,0 +1,660 @@
+---
+title: 'Flow Builder Service'
+description: 'Build and manage conversational flows with nodes, options, and branching logic'
+icon: 'diagram-project'
+---
+
+## Overview
+
+The Flow Builder system enables creating menu-driven conversational experiences without AI. It consists of two main components:
+
+1. **FlowBuilderService** - Manages flow structure (CRUD for nodes and options)
+2. **ClassicBotService** - Executes flows based on user input
+
+**Use Cases:**
+- Menu-driven customer support
+- Appointment booking without AI
+- Structured FAQ systems
+- Fallback when AI is unavailable
+
+---
+
+## FlowBuilderService
+
+**Namespace:** `App\Services`
+
+Manages the creation, editing, and organization of conversational flow nodes.
+
+### Constructor
+
+```php
+public function __construct(
+    Database $db,
+    Logger $logger
+)
+```
+
+---
+
+## Flow Structure
+
+**Nodes** represent conversation steps. Each node can:
+- Display a message to the user
+- Present multiple choice options
+- Trigger calendar flows
+- Act as a farewell/end point
+- Match keywords or accept any input
+
+**Options** are choices within a node that lead to other nodes.
+
+### Node Types
+
+| Type | Description |
+|------|-------------|
+| **Root Node** | Entry point - matches initial user input |
+| **Regular Node** | Intermediate step with options |
+| **Calendar Node** | Triggers appointment scheduling |
+| **Farewell Node** | Ends the conversation |
+| **Match-Any Node** | Catches all input (fallback) |
+
+---
+
+## Public Methods
+
+### getFlowTree
+
+Retrieves the complete flow structure with all nodes and their options.
+
+```php
+public function getFlowTree(): array
+```
+
+**Returns:** Array of nodes with nested options
+
+<CodeGroup>
+```php flow-editor.php
+$flowBuilder = new FlowBuilderService($db, $logger);
+$tree = $flowBuilder->getFlowTree();
+
+foreach ($tree as $node) {
+    echo "Node: {$node['name']}\n";
+    echo "Message: {$node['message_text']}\n";
+    echo "Root: " . ($node['is_root'] ? 'Yes' : 'No') . "\n";
+    echo "Keywords: " . implode(', ', $node['trigger_keywords']) . "\n";
+    
+    foreach ($node['options'] as $option) {
+        echo "  Option: {$option['option_text']}\n";
+        echo "  Keywords: " . implode(', ', json_decode($option['option_keywords'], true)) . "\n";
+        echo "  Next: {$option['next_node_id']}\n";
+    }
+    echo "\n";
+}
+```
+</CodeGroup>
+
+**Node Structure:**
+```php
+[
+    'id' => 1,
+    'name' => 'Main Menu',
+    'trigger_keywords' => ['menu', 'inicio', 'start'],
+    'message_text' => '¡Hola! ¿En qué puedo ayudarte?\n1. Agendar cita\n2. Ver mis citas\n3. Preguntas frecuentes',
+    'next_node_id' => null,
+    'is_root' => 1,
+    'requires_calendar' => 0,
+    'match_any_input' => 0,
+    'is_farewell' => 0,
+    'position_order' => 0,
+    'is_active' => 1,
+    'options' => [
+        [
+            'id' => 1,
+            'node_id' => 1,
+            'option_text' => 'Agendar cita',
+            'option_keywords' => ["1", "agendar", "cita"],
+            'next_node_id' => 2,
+            'position_order' => 0
+        ]
+    ]
+]
+```
+
+---
+
+### saveNode
+
+Creates or updates a flow node with its options.
+
+```php
+public function saveNode(array $data): int
+```
+
+<ParamField path="data" type="array" required>
+  Node data including:
+  - `id` (optional) - For updates
+  - `name` - Node name
+  - `trigger_keywords` - Array of keywords
+  - `message_text` - Message to display
+  - `next_node_id` - Default next node
+  - `is_root` - Is entry point
+  - `requires_calendar` - Triggers calendar flow
+  - `match_any_input` - Accepts all input
+  - `is_farewell` - Ends conversation
+  - `position_order` - Display order
+  - `options` - Array of option objects
+</ParamField>
+
+**Returns:** Integer node ID
+
+**Throws:** `\InvalidArgumentException` if:
+- Required fields missing
+- Cycle detected in flow graph
+
+<CodeGroup>
+```php Create Root Node
+$flowBuilder = new FlowBuilderService($db, $logger);
+
+$nodeId = $flowBuilder->saveNode([
+    'name' => 'Main Menu',
+    'trigger_keywords' => ['menu', 'inicio', 'hola'],
+    'message_text' => '¡Hola! ¿En qué puedo ayudarte?\n\n1. Agendar cita\n2. Ver mis citas\n3. Cancelar cita\n\nEscribe el número o la opción que deseas.',
+    'next_node_id' => null,
+    'is_root' => true,
+    'requires_calendar' => false,
+    'match_any_input' => false,
+    'is_farewell' => false,
+    'position_order' => 0,
+    'is_active' => true,
+    'options' => [
+        [
+            'option_text' => 'Agendar cita',
+            'option_keywords' => ['1', 'agendar', 'cita', 'agenda'],
+            'next_node_id' => null,  // Will be set later
+            'position_order' => 0
+        ],
+        [
+            'option_text' => 'Ver mis citas',
+            'option_keywords' => ['2', 'ver', 'mis citas', 'listar'],
+            'next_node_id' => null,
+            'position_order' => 1
+        ]
+    ]
+]);
+
+echo "Created node ID: {$nodeId}";
+```
+
+```php Create Calendar Node
+$calendarNodeId = $flowBuilder->saveNode([
+    'name' => 'Schedule Appointment',
+    'trigger_keywords' => [],
+    'message_text' => 'Perfecto, voy a ayudarte a agendar una cita.',
+    'next_node_id' => null,
+    'is_root' => false,
+    'requires_calendar' => true,  // This triggers calendar flow
+    'match_any_input' => false,
+    'is_farewell' => false,
+    'position_order' => 1,
+    'is_active' => true,
+    'options' => []
+]);
+
+// Update main menu option to point to calendar node
+$flowBuilder->saveNode([
+    'id' => $mainMenuId,
+    'name' => 'Main Menu',
+    // ... other fields ...
+    'options' => [
+        [
+            'option_text' => 'Agendar cita',
+            'option_keywords' => ['1', 'agendar'],
+            'next_node_id' => $calendarNodeId,  // Link to calendar
+            'position_order' => 0
+        ]
+    ]
+]);
+```
+
+```php Create Farewell Node
+$farewellId = $flowBuilder->saveNode([
+    'name' => 'Goodbye',
+    'trigger_keywords' => [],
+    'message_text' => '¡Gracias por contactarnos! Que tengas un excelente día. 👋',
+    'next_node_id' => null,
+    'is_root' => false,
+    'requires_calendar' => false,
+    'match_any_input' => false,
+    'is_farewell' => true,  // Ends conversation
+    'position_order' => 99,
+    'is_active' => true,
+    'options' => []
+]);
+```
+</CodeGroup>
+
+---
+
+### deleteNode
+
+Deletes a node and updates references to prevent broken links.
+
+```php
+public function deleteNode(int $id): void
+```
+
+**Behavior:**
+- Sets all references to this node to `NULL`
+- Deletes the node and its options
+- Prevents orphaned links
+
+```php
+$flowBuilder->deleteNode(42);
+// All nodes/options pointing to node 42 now have next_node_id = NULL
+```
+
+<Warning>
+**Cascade implications:** Deleting a node breaks the flow chain. Make sure to update parent nodes to point to an alternative.
+</Warning>
+
+---
+
+### detectCycle
+
+Checks if linking two nodes would create an infinite loop.
+
+```php
+public function detectCycle(int $startId, int $targetId): bool
+```
+
+**Returns:** `true` if cycle detected, `false` if safe
+
+```php
+// Check if linking node 5 to node 10 would create a cycle
+if ($flowBuilder->detectCycle(5, 10)) {
+    echo "Error: This would create an infinite loop!";
+} else {
+    echo "Safe to link";
+}
+```
+
+<Note>
+The `saveNode` method automatically calls `detectCycle` and throws an exception if a cycle is detected.
+</Note>
+
+---
+
+### exportToJson
+
+Exports the entire flow structure to JSON.
+
+```php
+public function exportToJson(): string
+```
+
+**Returns:** JSON string with version, timestamp, and all nodes
+
+<CodeGroup>
+```php export-flow.php
+$json = $flowBuilder->exportToJson();
+file_put_contents('flow-backup.json', $json);
+
+// JSON structure:
+// {
+//   "version": "1.0",
+//   "exported_at": "2026-03-06T10:30:00-05:00",
+//   "nodes": [ ... ]
+// }
+```
+</CodeGroup>
+
+---
+
+### importFromJson
+
+Imports a flow structure from JSON, replacing the current flow.
+
+```php
+public function importFromJson(string $json): array
+```
+
+**Returns:** Array with `imported_nodes` count and `id_map` (old ID → new ID)
+
+**Throws:** `\InvalidArgumentException` if JSON is invalid
+
+**Behavior:**
+- Wrapped in database transaction
+- Deletes existing flow first
+- Creates new nodes with new IDs
+- Remaps all node references
+
+<CodeGroup>
+```php import-flow.php
+$json = file_get_contents('flow-backup.json');
+
+try {
+    $result = $flowBuilder->importFromJson($json);
+    
+    echo "Successfully imported {$result['imported_nodes']} nodes\n";
+    echo "ID mapping:\n";
+    foreach ($result['id_map'] as $oldId => $newId) {
+        echo "  {$oldId} → {$newId}\n";
+    }
+    
+} catch (\InvalidArgumentException $e) {
+    echo "Import failed: {$e->getMessage()}";
+}
+```
+</CodeGroup>
+
+<Warning>
+**Destructive operation:** Import deletes all existing nodes before importing. Make sure to export first!
+</Warning>
+
+---
+
+## ClassicBotService
+
+**Namespace:** `App\Services`
+
+Executes flow navigation based on user input, managing sessions and keyword matching.
+
+### Constructor
+
+```php
+public function __construct(
+    Database $db,
+    Logger $logger
+)
+```
+
+---
+
+### processMessage
+
+Processes user input and returns the appropriate bot response.
+
+```php
+public function processMessage(
+    string $userMessage,
+    string $userPhone
+): array
+```
+
+**Returns:**
+```php
+[
+    'type' => 'response',  // response, calendar, farewell, fallback
+    'response' => 'Message text',
+    'calendar_intent' => 'schedule'  // Only for calendar type
+]
+```
+
+**Response Types:**
+
+| Type | Description |
+|------|-------------|
+| `response` | Normal node message |
+| `calendar` | Triggers calendar flow |
+| `farewell` | Conversation ended |
+| `fallback` | No match found |
+
+<CodeGroup>
+```php webhook.php Classic Mode
+$classicBot = new ClassicBotService($db, $logger);
+
+$result = $classicBot->processMessage(
+    $messageData['text'],
+    $messageData['from']
+);
+
+if ($result['type'] === 'calendar') {
+    // Trigger calendar flow
+    $calendarHandler = new ClassicCalendarFlowHandler(...);
+    $calendarResult = $calendarHandler->start(
+        $result['calendar_intent'],
+        $messageData['from'],
+        $messageData['contact_name']
+    );
+    $whatsapp->sendMessage($messageData['from'], $calendarResult['response']);
+}
+else if ($result['type'] === 'response') {
+    $whatsapp->sendMessage($messageData['from'], $result['response']);
+}
+else if ($result['type'] === 'fallback') {
+    $whatsapp->sendMessage($messageData['from'], $result['response']);
+}
+```
+</CodeGroup>
+
+---
+
+## Flow Execution Logic
+
+### Session Management
+
+The bot maintains a session for each user:
+
+**Session Data:**
+- `user_phone` - User identifier
+- `current_node_id` - Where they are in the flow
+- `attempts` - Failed match attempts
+- `expires_at` - Session expiration (30 minutes)
+
+**Session States:**
+1. **No Session** - User is starting fresh, match against root nodes
+2. **Active Session** - User is mid-flow, match against current node options
+3. **Expired Session** - Cleared automatically, treated as no session
+
+---
+
+### Keyword Matching
+
+The bot matches user input against keywords using case-insensitive substring matching:
+
+```php
+// Node keywords: ['menu', 'inicio', 'start']
+// User input: "Quiero ver el MENU"
+// Result: MATCH (contains 'menu')
+
+// Option keywords: ['1', 'agendar', 'cita']
+// User input: "1"
+// Result: MATCH
+```
+
+**Match Priority:**
+1. Options of current node (if in session)
+2. Root node keywords (if no session)
+3. Match-any fallback node
+4. Fallback message
+
+---
+
+### Max Attempts
+
+After 3 failed attempts to match input, the session is cleared and user sees fallback message.
+
+```php
+const MAX_ATTEMPTS = 3;
+
+// User at node asking "¿Qué opción prefieres? 1, 2 o 3"
+// User types: "no sé" - Attempt 1
+// User types: "help" - Attempt 2
+// User types: "???" - Attempt 3 → Session cleared, fallback shown
+```
+
+---
+
+## Complete Flow Example
+
+<CodeGroup>
+```php Build Complete Flow
+$flowBuilder = new FlowBuilderService($db, $logger);
+
+// 1. Create main menu (root node)
+$mainMenuId = $flowBuilder->saveNode([
+    'name' => 'Main Menu',
+    'trigger_keywords' => ['menu', 'inicio', 'hola', 'hi'],
+    'message_text' => '👋 ¡Hola! Bienvenido a nuestro sistema.\n\n¿Qué deseas hacer?\n\n1️⃣ Agendar una cita\n2️⃣ Ver mis citas\n3️⃣ Cancelar una cita\n4️⃣ Preguntas frecuentes\n\nEscribe el número o describe lo que necesitas.',
+    'next_node_id' => null,
+    'is_root' => true,
+    'options' => []
+]);
+
+// 2. Create calendar node
+$scheduleNodeId = $flowBuilder->saveNode([
+    'name' => 'Schedule Appointment',
+    'trigger_keywords' => [],
+    'message_text' => 'Perfecto, voy a ayudarte a agendar tu cita.',
+    'requires_calendar' => true,
+    'is_root' => false,
+    'options' => []
+]);
+
+// 3. Create FAQ node
+$faqNodeId = $flowBuilder->saveNode([
+    'name' => 'FAQ Menu',
+    'trigger_keywords' => [],
+    'message_text' => '❓ Preguntas frecuentes:\n\n1️⃣ Horarios de atención\n2️⃣ Ubicación\n3️⃣ Formas de pago\n0️⃣ Volver al menú principal',
+    'options' => []
+]);
+
+// 4. Create FAQ answer nodes
+$hoursNodeId = $flowBuilder->saveNode([
+    'name' => 'Business Hours',
+    'trigger_keywords' => [],
+    'message_text' => '🕐 Horarios de atención:\n\nLunes a Viernes: 9:00 AM - 6:00 PM\nSábados: 9:00 AM - 2:00 PM\nDomingos: Cerrado\n\nEscribe *menu* para volver al inicio.',
+    'is_farewell' => true,
+    'options' => []
+]);
+
+$locationNodeId = $flowBuilder->saveNode([
+    'name' => 'Location',
+    'trigger_keywords' => [],
+    'message_text' => '📍 Ubicación:\n\nCalle 123 #45-67\nBogotá, Colombia\n\nPuedes encontrarnos en Google Maps: https://maps.google.com/...\n\nEscribe *menu* para volver al inicio.',
+    'is_farewell' => true,
+    'options' => []
+]);
+
+// 5. Link everything together
+$flowBuilder->saveNode([
+    'id' => $mainMenuId,
+    'name' => 'Main Menu',
+    'trigger_keywords' => ['menu', 'inicio', 'hola'],
+    'message_text' => '👋 ¡Hola! Bienvenido a nuestro sistema.\n\n¿Qué deseas hacer?\n\n1️⃣ Agendar una cita\n2️⃣ Ver mis citas\n3️⃣ Cancelar una cita\n4️⃣ Preguntas frecuentes',
+    'is_root' => true,
+    'options' => [
+        [
+            'option_text' => 'Agendar cita',
+            'option_keywords' => ['1', 'agendar', 'cita', 'agenda'],
+            'next_node_id' => $scheduleNodeId
+        ],
+        [
+            'option_text' => 'Preguntas frecuentes',
+            'option_keywords' => ['4', 'preguntas', 'faq', 'ayuda'],
+            'next_node_id' => $faqNodeId
+        ]
+    ]
+]);
+
+$flowBuilder->saveNode([
+    'id' => $faqNodeId,
+    'name' => 'FAQ Menu',
+    'trigger_keywords' => [],
+    'message_text' => '❓ Preguntas frecuentes:\n\n1️⃣ Horarios\n2️⃣ Ubicación\n0️⃣ Menú principal',
+    'options' => [
+        [
+            'option_text' => 'Horarios',
+            'option_keywords' => ['1', 'horarios', 'horario'],
+            'next_node_id' => $hoursNodeId
+        ],
+        [
+            'option_text' => 'Ubicación',
+            'option_keywords' => ['2', 'ubicacion', 'donde', 'dirección'],
+            'next_node_id' => $locationNodeId
+        ],
+        [
+            'option_text' => 'Volver',
+            'option_keywords' => ['0', 'menu', 'volver', 'atras'],
+            'next_node_id' => $mainMenuId
+        ]
+    ]
+]);
+
+echo "Flow created successfully!";
+```
+</CodeGroup>
+
+---
+
+## Database Schema
+
+### flow_nodes Table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INT | Primary key |
+| `name` | VARCHAR | Node name (admin label) |
+| `trigger_keywords` | TEXT | JSON array of keywords |
+| `message_text` | TEXT | Message to display |
+| `next_node_id` | INT | Default next node |
+| `is_root` | TINYINT | Entry point flag |
+| `requires_calendar` | TINYINT | Triggers calendar flow |
+| `match_any_input` | TINYINT | Accepts all input |
+| `is_farewell` | TINYINT | Ends conversation |
+| `position_order` | INT | Display order |
+| `is_active` | TINYINT | Enabled flag |
+| `created_at` | TIMESTAMP | Creation time |
+
+### flow_options Table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INT | Primary key |
+| `node_id` | INT | Parent node |
+| `option_text` | VARCHAR | Display text |
+| `option_keywords` | TEXT | JSON array of keywords |
+| `next_node_id` | INT | Target node |
+| `position_order` | INT | Display order |
+
+### classic_flow_sessions Table
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `user_phone` | VARCHAR | Primary key |
+| `current_node_id` | INT | Current position |
+| `attempts` | INT | Failed attempts |
+| `expires_at` | TIMESTAMP | Session expiration |
+
+---
+
+## Best Practices
+
+<Tip>
+**Use clear numbering** in messages (1️⃣, 2️⃣) and include numbers in keywords (["1", "option name"]) for better UX.
+</Tip>
+
+<Warning>
+**Test for cycles** before deploying flows. Use the visual editor or call `detectCycle` manually.
+</Warning>
+
+<Note>
+**Fallback nodes** with `match_any_input = true` should be used sparingly as catch-alls. Only one should exist per flow level.
+</Note>
+
+<Tip>
+**Export regularly** to back up your flow structure. Store exports in version control.
+</Tip>
+
+---
+
+## Related Services
+
+- [Classic Bot Service](/services/flow-builder-service#classicbotservice) - Executes flows
+- [Classic Calendar Flow Handler](/services/calendar-service#classic-calendar-flow) - Menu-based calendar integration
+- [Settings Management](/configuration/settings) - Configure fallback messages
+
+## Source Code
+
+- FlowBuilderService: `src/Services/FlowBuilderService.php:1-230`
+- ClassicBotService: `src/Services/ClassicBotService.php:1-257`
+- ClassicCalendarFlowHandler: `src/Handlers/ClassicCalendarFlowHandler.php:1-631`

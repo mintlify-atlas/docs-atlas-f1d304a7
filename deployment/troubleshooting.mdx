@@ -1,0 +1,806 @@
+---
+title: Troubleshooting Guide
+description: Common issues and solutions for the WhatsApp RAG Bot
+---
+
+## Overview
+
+This guide covers common issues you may encounter when deploying or running the WhatsApp RAG Bot, with detailed solutions.
+
+## Webhook Problems
+
+### Webhook Verification Fails
+
+<AccordionGroup>
+  <Accordion title="Symptom: Meta says 'Failed to verify webhook'">
+    **Possible causes**:
+    - Verify token mismatch
+    - Server not responding
+    - SSL certificate issues
+    - Wrong callback URL
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Check verify token">
+        Ensure tokens match exactly (case-sensitive):
+        
+        ```bash .env
+        WHATSAPP_VERIFY_TOKEN=my_custom_token_123
+        ```
+        
+        Must match what you entered in Meta Developer Console.
+      </Step>
+      
+      <Step title="Test verification manually">
+        ```bash
+        curl "https://yourdomain.com/whatsapp/webhook?hub.mode=subscribe&hub.verify_token=my_custom_token_123&hub.challenge=test_challenge"
+        
+        # Should return: test_challenge
+        ```
+      </Step>
+      
+      <Step title="Check webhook.php logic">
+        From `webhook.php:84-103`:
+        ```php
+        if ($mode === 'subscribe' && $token === $verifyToken) {
+            echo $challenge;
+            http_response_code(200);
+            exit;
+        }
+        ```
+        
+        Ensure this code is reachable and not blocked.
+      </Step>
+    </Steps>
+  </Accordion>
+  
+  <Accordion title="Symptom: 'Unauthorized' (401) webhook error">
+    **Cause**: Webhook signature verification failing
+    
+    From `webhook.php:115-124`:
+    ```php
+    $signature = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
+    $expected = 'sha256=' . hash_hmac('sha256', $rawBody, $appSecret);
+    if (!hash_equals($expected, $signature)) {
+        http_response_code(401);
+        exit('Unauthorized');
+    }
+    ```
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Verify app secret">
+        Check `.env` has correct `WHATSAPP_APP_SECRET` from Meta Developer Console:
+        
+        ```bash .env
+        WHATSAPP_APP_SECRET=abc123def456...
+        ```
+      </Step>
+      
+      <Step title="Check request headers">
+        Log the incoming signature:
+        ```php
+        error_log('Received signature: ' . ($_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? 'NONE'));
+        error_log('Expected signature: ' . $expected);
+        ```
+      </Step>
+      
+      <Step title="Temporary: Skip validation for testing">
+        <Warning>Only for debugging, never in production!</Warning>
+        
+        Comment out validation temporarily:
+        ```php
+        // if (!hash_equals($expected, $signature)) {
+        //     http_response_code(401);
+        //     exit('Unauthorized');
+        // }
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+  
+  <Accordion title="Symptom: Webhook receives messages but bot doesn't respond">
+    **Possible causes**:
+    - OpenAI API issues
+    - Database connection problems
+    - AI disabled for conversation
+    - Conversation in 'pending_human' status
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Check logs">
+        ```bash
+        tail -100 logs/$(date +%Y-%m-%d).log
+        ```
+        
+        Look for:
+        - `[ERROR]` entries
+        - OpenAI API errors
+        - Database connection errors
+      </Step>
+      
+      <Step title="Verify conversation status">
+        ```sql
+        SELECT phone_number, status, ai_enabled 
+        FROM conversations 
+        WHERE phone_number = '1234567890';
+        ```
+        
+        If `status = 'pending_human'` or `ai_enabled = 0`:
+        ```sql
+        UPDATE conversations 
+        SET status = 'active', ai_enabled = 1 
+        WHERE phone_number = '1234567890';
+        ```
+      </Step>
+      
+      <Step title="Test OpenAI connection">
+        ```bash
+        curl https://api.openai.com/v1/models \
+          -H "Authorization: Bearer $OPENAI_API_KEY"
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+</AccordionGroup>
+
+## API Issues
+
+### OpenAI API Errors
+
+<AccordionGroup>
+  <Accordion title="Insufficient Funds / Quota Exceeded">
+    **Symptom**: Bot stops responding, logs show `INSUFFICIENT_FUNDS`
+    
+    From `webhook.php:22-37`, the bot automatically detects and tracks this:
+    ```php
+    function handleInsufficientFunds($db, $e) {
+        if (strpos($e->getMessage(), 'INSUFFICIENT_FUNDS') !== false) {
+            $db->query(
+                "INSERT INTO settings (setting_key, setting_value) 
+                 VALUES ('openai_status', 'insufficient_funds') 
+                 ON DUPLICATE KEY UPDATE setting_value = 'insufficient_funds'",
+                []
+            );
+            return true;
+        }
+        return false;
+    }
+    ```
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Check OpenAI account">
+        1. Log in to [platform.openai.com](https://platform.openai.com)
+        2. Go to **Settings > Billing**
+        3. Verify account has credits
+        4. Add payment method if needed
+      </Step>
+      
+      <Step title="Reset status in database">
+        After adding credits:
+        ```sql
+        UPDATE settings 
+        SET setting_value = 'active' 
+        WHERE setting_key = 'openai_status';
+        ```
+      </Step>
+      
+      <Step title="Monitor usage">
+        Check OpenAI usage:
+        ```sql
+        SELECT COUNT(*) as message_count 
+        FROM messages 
+        WHERE sender_type = 'bot' 
+          AND created_at >= DATE_SUB(NOW(), INTERVAL 1 DAY);
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+  
+  <Accordion title="Invalid API Key">
+    **Symptom**: `401 Unauthorized` from OpenAI
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Verify API key format">
+        ```bash .env
+        # Correct format
+        OPENAI_API_KEY=sk-proj-xxxxxxxxxxxxxxxxxxxxx
+        
+        # NOT (old format)
+        OPENAI_API_KEY=sk-xxxxxxxxxxxxxxxxxxxxx
+        ```
+      </Step>
+      
+      <Step title="Regenerate key if needed">
+        1. Go to [platform.openai.com/api-keys](https://platform.openai.com/api-keys)
+        2. Create new secret key
+        3. Update `.env` immediately
+      </Step>
+      
+      <Step title="Test manually">
+        ```bash
+        curl https://api.openai.com/v1/chat/completions \
+          -H "Content-Type: application/json" \
+          -H "Authorization: Bearer $OPENAI_API_KEY" \
+          -d '{
+            "model": "gpt-3.5-turbo",
+            "messages": [{"role": "user", "content": "test"}],
+            "max_tokens": 10
+          }'
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+  
+  <Accordion title="Rate Limit Exceeded">
+    **Symptom**: `429 Too Many Requests`
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Check rate limits">
+        OpenAI rate limits vary by tier:
+        - Free tier: Very limited
+        - Tier 1: 3,500 RPM (requests per minute)
+        - Tier 2+: Higher limits
+      </Step>
+      
+      <Step title="Implement request queuing">
+        Add delays between requests:
+        ```php
+        // In OpenAIService.php
+        sleep(1); // Wait 1 second between requests
+        ```
+      </Step>
+      
+      <Step title="Use embedding cache">
+        The bot already caches embeddings in `query_embedding_cache` table:
+        ```sql
+        SELECT COUNT(*) FROM query_embedding_cache;
+        SELECT AVG(hit_count) as avg_reuse FROM query_embedding_cache;
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+</AccordionGroup>
+
+### WhatsApp API Errors
+
+<AccordionGroup>
+  <Accordion title="Invalid Access Token">
+    **Symptom**: Bot can't send messages, `190` error from WhatsApp API
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Regenerate access token">
+        1. Go to [developers.facebook.com](https://developers.facebook.com)
+        2. Open your WhatsApp app
+        3. Go to **WhatsApp > API Setup**
+        4. Generate new token
+        5. Update `.env`:
+        ```bash
+        WHATSAPP_ACCESS_TOKEN=EAAxxxxxxxxxxxxx
+        ```
+      </Step>
+      
+      <Step title="Check token expiration">
+        Temporary tokens expire in 24 hours. Use system user token for permanent access.
+      </Step>
+    </Steps>
+  </Accordion>
+  
+  <Accordion title="Message Template Errors">
+    **Symptom**: First message to user fails with template error
+    
+    **Note**: 
+    This bot sends text messages, not template messages. Ensure you're not triggering template requirements.
+    
+    **Solution**:
+    - User must message you first (user-initiated conversation)
+    - Or use approved message templates for business-initiated messages
+  </Accordion>
+</AccordionGroup>
+
+## Database Issues
+
+### Connection Problems
+
+<AccordionGroup>
+  <Accordion title="Can't connect to MySQL server">
+    **Symptom**: `SQLSTATE[HY000] [2002] Connection refused`
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Verify MySQL is running">
+        ```bash
+        # Check status
+        sudo systemctl status mysql
+        # or
+        mysqladmin ping
+        
+        # Start if stopped
+        sudo systemctl start mysql
+        ```
+      </Step>
+      
+      <Step title="Check credentials">
+        ```bash .env
+        DB_HOST=localhost
+        DB_PORT=3306
+        DB_NAME=whatsapp_rag_bot
+        DB_USER=correct_user
+        DB_PASSWORD=correct_password
+        ```
+      </Step>
+      
+      <Step title="Test connection manually">
+        ```bash
+        mysql -h localhost -u your_user -p whatsapp_rag_bot
+        ```
+      </Step>
+      
+      <Step title="Check MySQL user permissions">
+        ```sql
+        SHOW GRANTS FOR 'your_user'@'localhost';
+        
+        -- If needed, grant permissions:
+        GRANT ALL PRIVILEGES ON whatsapp_rag_bot.* TO 'your_user'@'localhost';
+        FLUSH PRIVILEGES;
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+  
+  <Accordion title="Access denied for user">
+    **Symptom**: `SQLSTATE[HY000] [1045] Access denied`
+    
+    **Solution**:
+    
+    ```sql
+    -- Create user with correct permissions
+    CREATE USER 'whatsapp_user'@'localhost' IDENTIFIED BY 'secure_password';
+    GRANT ALL PRIVILEGES ON whatsapp_rag_bot.* TO 'whatsapp_user'@'localhost';
+    FLUSH PRIVILEGES;
+    ```
+    
+    Update `.env` with these credentials.
+  </Accordion>
+  
+  <Accordion title="Table doesn't exist">
+    **Symptom**: `Table 'whatsapp_rag_bot.documents' doesn't exist`
+    
+    **Solution**:
+    
+    ```bash
+    # Re-import schema
+    mysql -u root -p whatsapp_rag_bot < database/schema.sql
+    
+    # Verify tables
+    mysql -u root -p whatsapp_rag_bot -e "SHOW TABLES;"
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Performance Issues
+
+<Accordion title="Slow vector searches">
+  **Symptom**: Bot responses are slow, especially with many documents
+  
+  **Solution**:
+  
+  <Steps>
+    <Step title="Add missing indexes">
+      ```sql
+      -- Check existing indexes
+      SHOW INDEX FROM vectors;
+      
+      -- Add if missing
+      CREATE INDEX idx_document_id ON vectors(document_id);
+      CREATE INDEX idx_created_at ON vectors(created_at);
+      ```
+    </Step>
+    
+    <Step title="Optimize tables">
+      ```sql
+      OPTIMIZE TABLE vectors;
+      OPTIMIZE TABLE messages;
+      OPTIMIZE TABLE documents;
+      ```
+    </Step>
+    
+    <Step title="Monitor query performance">
+      ```sql
+      -- Enable slow query log
+      SET GLOBAL slow_query_log = 'ON';
+      SET GLOBAL long_query_time = 2;
+      
+      -- Check slow queries
+      SELECT * FROM mysql.slow_log ORDER BY start_time DESC LIMIT 10;
+      ```
+    </Step>
+  </Steps>
+</Accordion>
+
+## File Upload Issues
+
+<AccordionGroup>
+  <Accordion title="Document upload fails">
+    **Symptom**: Can't upload PDF/DOCX files through admin panel
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Check file size limits">
+        From `.htaccess`:
+        ```apache
+        php_value upload_max_filesize 10M
+        php_value post_max_size 10M
+        ```
+        
+        Also check `php.ini`:
+        ```ini
+        upload_max_filesize = 10M
+        post_max_size = 10M
+        ```
+      </Step>
+      
+      <Step title="Verify directory permissions">
+        ```bash
+        chmod 755 uploads/
+        chown www-data:www-data uploads/
+        
+        # Test write access
+        sudo -u www-data touch uploads/test.txt
+        ```
+      </Step>
+      
+      <Step title="Check disk space">
+        ```bash
+        df -h /path/to/uploads
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+  
+  <Accordion title="Audio transcription fails">
+    **Symptom**: Voice messages not transcribed
+    
+    From `webhook.php:225-259`, audio processing:
+    ```php
+    $audioContent = $whatsapp->downloadMedia($messageData['audio_id']);
+    // ... save to uploads/audios/ ...
+    $transcription = $openai->transcribeAudio($audioContent, 'audio.ogg');
+    ```
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Check uploads/audios/ exists">
+        ```bash
+        mkdir -p uploads/audios
+        chmod 755 uploads/audios
+        ```
+      </Step>
+      
+      <Step title="Verify OpenAI Whisper access">
+        ```bash
+        curl https://api.openai.com/v1/audio/transcriptions \
+          -H "Authorization: Bearer $OPENAI_API_KEY" \
+          -H "Content-Type: multipart/form-data" \
+          -F model="whisper-1" \
+          -F file="@test.ogg"
+        ```
+      </Step>
+      
+      <Step title="Check audio format support">
+        WhatsApp sends OGG Opus format. Ensure OpenAI accepts it.
+      </Step>
+    </Steps>
+  </Accordion>
+</AccordionGroup>
+
+## Logging and Debugging
+
+### Enable Debug Mode
+
+<Steps>
+  <Step title="Update .env">
+    ```bash .env
+    APP_DEBUG=true
+    ```
+  </Step>
+  
+  <Step title="Check PHP error logs">
+    ```bash
+    # Find PHP error log location
+    php -i | grep error_log
+    
+    # View errors
+    tail -f /var/log/php_errors.log
+    ```
+  </Step>
+  
+  <Step title="Application logs">
+    From `src/Core/Logger.php`, logs are written to `logs/YYYY-MM-DD.log`:
+    
+    ```bash
+    # View today's log
+    tail -100 logs/$(date +%Y-%m-%d).log
+    
+    # Follow in real-time
+    tail -f logs/$(date +%Y-%m-%d).log
+    
+    # Search for errors
+    grep ERROR logs/*.log
+    
+    # Count errors by date
+    for file in logs/*.log; do
+      echo "$file: $(grep -c ERROR $file)"
+    done
+    ```
+  </Step>
+</Steps>
+
+### Common Log Messages
+
+<CodeGroup>
+```log Normal Operation
+[2026-03-06 14:30:22] [INFO] Webhook received {"type":"text","from_hash":"abc123def456"}
+[2026-03-06 14:30:23] [INFO] Calendar intent detection {"intent":"schedule","confidence":0.85}
+[2026-03-06 14:30:24] [INFO] RAG response generated {"confidence":0.92,"sources":3}
+```
+
+```log OpenAI Issues
+[2026-03-06 14:30:22] [ERROR] RAG Error: Insufficient funds in OpenAI account
+[2026-03-06 14:30:22] [ERROR] OpenAI Fallback Error: Rate limit exceeded
+```
+
+```log Database Issues
+[2026-03-06 14:30:22] [ERROR] Database connection failed: Access denied for user
+[2026-03-06 14:30:22] [ERROR] Query failed: Table 'vectors' doesn't exist
+```
+
+```log Webhook Issues
+[2026-03-06 14:30:22] [WARNING] Webhook signature validation SKIPPED - no app_secret configured
+[2026-03-06 14:30:22] [INFO] Message already processed, skipping {"message_id":"wamid.xxx"}
+```
+</CodeGroup>
+
+### Add Custom Logging
+
+```php
+use App\Core\Logger;
+
+$logger = new Logger(__DIR__ . '/logs');
+
+// Log levels
+$logger->info('User action', ['user_id' => 123]);
+$logger->warning('Unusual activity', ['ip' => $_SERVER['REMOTE_ADDR']]);
+$logger->error('Critical failure', ['error' => $e->getMessage()]);
+$logger->debug('Variable dump', ['data' => $someVariable]);
+```
+
+## Permission Errors
+
+<AccordionGroup>
+  <Accordion title="Can't write to logs/">
+    **Symptom**: No log files created, or permission denied errors
+    
+    **Solution**:
+    ```bash
+    # Fix ownership
+    chown -R www-data:www-data logs/
+    
+    # Fix permissions
+    chmod 755 logs/
+    
+    # Verify
+    ls -la logs/
+    ```
+  </Accordion>
+  
+  <Accordion title=".htaccess not working">
+    **Symptom**: Can access .env directly, or rewrites don't work
+    
+    **Solution**:
+    
+    <Steps>
+      <Step title="Verify mod_rewrite enabled">
+        ```bash
+        # Apache
+        a2enmod rewrite
+        sudo systemctl restart apache2
+        
+        # Check
+        apache2ctl -M | grep rewrite
+        ```
+      </Step>
+      
+      <Step title="Check AllowOverride">
+        In Apache virtual host or main config:
+        ```apache
+        <Directory /var/www/html>
+            AllowOverride All
+        </Directory>
+        ```
+      </Step>
+    </Steps>
+  </Accordion>
+</AccordionGroup>
+
+## Classic Bot Mode Issues
+
+<Accordion title="Classic bot not responding">
+  **Symptom**: In classic mode, bot doesn't follow flow nodes
+  
+  **Solution**:
+  
+  <Steps>
+    <Step title="Verify bot mode setting">
+      ```sql
+      SELECT setting_value FROM settings WHERE setting_key = 'bot_mode';
+      -- Should return: 'classic'
+      
+      -- If not:
+      UPDATE settings SET setting_value = 'classic' WHERE setting_key = 'bot_mode';
+      ```
+    </Step>
+    
+    <Step title="Check flow nodes exist">
+      ```sql
+      SELECT COUNT(*) FROM flow_nodes WHERE is_active = 1;
+      -- Should be > 0
+      
+      -- View root node:
+      SELECT * FROM flow_nodes WHERE is_root = 1 LIMIT 1;
+      ```
+    </Step>
+    
+    <Step title="Test flow matching">
+      ```sql
+      -- Check trigger keywords
+      SELECT name, trigger_keywords FROM flow_nodes WHERE is_active = 1;
+      ```
+    </Step>
+  </Steps>
+</Accordion>
+
+## Calendar Integration Issues
+
+<Accordion title="Calendar booking fails">
+  **Symptom**: Can't create appointments
+  
+  **Solution**:
+  
+  <Steps>
+    <Step title="Verify calendar is enabled">
+      ```sql
+      SELECT setting_value FROM settings WHERE setting_key = 'calendar_enabled';
+      -- Should return: 'true'
+      ```
+    </Step>
+    
+    <Step title="Check Google OAuth credentials">
+      ```sql
+      SELECT access_token, refresh_token, calendar_id 
+      FROM google_oauth_credentials 
+      WHERE id = 1;
+      ```
+      
+      All should be non-empty.
+    </Step>
+    
+    <Step title="Test Google Calendar API">
+      ```bash
+      curl "https://www.googleapis.com/calendar/v3/calendars/primary/events" \
+        -H "Authorization: Bearer $ACCESS_TOKEN"
+      ```
+    </Step>
+  </Steps>
+</Accordion>
+
+## Emergency Reset
+
+<Warning>
+Use only as last resort. This will clear all conversations and messages.
+</Warning>
+
+```sql
+-- Reset conversations
+TRUNCATE TABLE messages;
+TRUNCATE TABLE conversations;
+TRUNCATE TABLE calendar_flow_state;
+TRUNCATE TABLE classic_flow_sessions;
+
+-- Reset OpenAI status
+UPDATE settings SET setting_value = 'active' WHERE setting_key = 'openai_status';
+
+-- Clear embedding cache
+TRUNCATE TABLE query_embedding_cache;
+```
+
+## Getting Help
+
+<CardGroup cols={2}>
+  <Card title="Check Logs First" icon="file-lines">
+    ```bash
+    tail -100 logs/$(date +%Y-%m-%d).log
+    ```
+  </Card>
+  
+  <Card title="Enable Debug Mode" icon="bug">
+    ```env
+    APP_DEBUG=true
+    ```
+  </Card>
+  
+  <Card title="Test Components" icon="flask">
+    - Test OpenAI API directly
+    - Test WhatsApp API directly
+    - Test database connection
+  </Card>
+  
+  <Card title="Review Documentation" icon="book">
+    - [Requirements](/deployment/requirements)
+    - [Local Setup](/deployment/local-development)
+    - [Production](/deployment/production)
+  </Card>
+</CardGroup>
+
+## Performance Monitoring
+
+```sql
+-- Message volume
+SELECT DATE(created_at) as date, COUNT(*) as count 
+FROM messages 
+GROUP BY DATE(created_at) 
+ORDER BY date DESC 
+LIMIT 7;
+
+-- Average response confidence
+SELECT AVG(confidence_score) as avg_confidence 
+FROM messages 
+WHERE sender_type = 'bot' AND confidence_score IS NOT NULL;
+
+-- Active conversations
+SELECT COUNT(*) FROM conversations WHERE status = 'active';
+
+-- Embedding cache hit rate
+SELECT 
+  COUNT(*) as total_queries,
+  SUM(hit_count) as total_hits,
+  AVG(hit_count) as avg_hits_per_query
+FROM query_embedding_cache;
+```
+
+## Preventive Maintenance
+
+<Steps>
+  <Step title="Daily tasks">
+    - Monitor log files for errors
+    - Check disk space
+    - Verify webhook is responding
+  </Step>
+  
+  <Step title="Weekly tasks">
+    - Review OpenAI usage and costs
+    - Check database size and optimize if needed
+    - Rotate old logs (30+ days)
+  </Step>
+  
+  <Step title="Monthly tasks">
+    - Update dependencies: `composer update`
+    - Review and update flow nodes
+    - Test disaster recovery (backup restore)
+    - Review security updates
+  </Step>
+</Steps>

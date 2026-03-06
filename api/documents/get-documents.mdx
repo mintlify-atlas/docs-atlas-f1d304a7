@@ -1,0 +1,230 @@
+---
+title: 'Get Documents'
+api: 'GET /api/get-documents'
+description: 'Retrieve a list of all uploaded documents with metadata'
+---
+
+## Overview
+
+This endpoint returns a list of all documents that have been uploaded and indexed in the RAG system. Each document includes metadata such as filename, file type, size, chunk count, and timestamps.
+
+## Request
+
+No parameters required. The endpoint returns all documents ordered by creation date (most recent first).
+
+**Query Parameters:** None
+
+**Request Body:** None
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates whether the request succeeded
+</ResponseField>
+
+<ResponseField name="documents" type="array" required>
+  Array of document objects, ordered by `created_at` descending (newest first)
+  
+  <ResponseField name="documents[].id" type="integer">
+    Unique document identifier
+  </ResponseField>
+  
+  <ResponseField name="documents[].filename" type="string">
+    Server-generated filename (unique identifier + timestamp + extension)
+  </ResponseField>
+  
+  <ResponseField name="documents[].original_name" type="string">
+    Original filename as uploaded by the user
+  </ResponseField>
+  
+  <ResponseField name="documents[].file_type" type="string">
+    File extension (pdf, docx, txt)
+  </ResponseField>
+  
+  <ResponseField name="documents[].file_size" type="integer">
+    File size in bytes
+  </ResponseField>
+  
+  <ResponseField name="documents[].file_hash" type="string">
+    MD5 hash of the file content (used for duplicate detection)
+  </ResponseField>
+  
+  <ResponseField name="documents[].content_text" type="string">
+    Extracted text content from the document
+  </ResponseField>
+  
+  <ResponseField name="documents[].chunk_count" type="integer">
+    Number of chunks created during RAG indexing. Updated after successful indexing.
+  </ResponseField>
+  
+  <ResponseField name="documents[].created_at" type="string">
+    ISO 8601 timestamp when the document was uploaded
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the request failed
+</ResponseField>
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET https://your-domain.com/api/get-documents
+```
+
+```javascript JavaScript
+const response = await fetch('/api/get-documents');
+const result = await response.json();
+
+console.log(`Found ${result.documents.length} documents`);
+result.documents.forEach(doc => {
+  console.log(`${doc.original_name} - ${doc.chunk_count} chunks`);
+});
+```
+
+```python Python
+import requests
+
+response = requests.get('https://your-domain.com/api/get-documents')
+result = response.json()
+
+for doc in result['documents']:
+    print(f"{doc['original_name']} - {doc['chunk_count']} chunks")
+```
+
+```php PHP
+$response = file_get_contents('https://your-domain.com/api/get-documents');
+$result = json_decode($response, true);
+
+foreach ($result['documents'] as $doc) {
+    echo "{$doc['original_name']} - {$doc['chunk_count']} chunks\n";
+}
+```
+
+</CodeGroup>
+
+## Success Response
+
+```json
+{
+  "success": true,
+  "documents": [
+    {
+      "id": 42,
+      "filename": "65f8a3b2c1d4e_1710345654.pdf",
+      "original_name": "company-handbook.pdf",
+      "file_type": "pdf",
+      "file_size": 2458624,
+      "file_hash": "5d41402abc4b2a76b9719d911017c592",
+      "content_text": "Welcome to our company handbook..." ,
+      "chunk_count": 127,
+      "created_at": "2026-03-06 10:30:45"
+    },
+    {
+      "id": 41,
+      "filename": "65f89f1a2b3c4_1710342123.docx",
+      "original_name": "product-specs.docx",
+      "file_type": "docx",
+      "file_size": 892416,
+      "file_hash": "7d793037a0760186574b0282f2f435e7",
+      "content_text": "Product Specifications..." ,
+      "chunk_count": 45,
+      "created_at": "2026-03-06 09:15:23"
+    },
+    {
+      "id": 40,
+      "filename": "65f87d5e3a1b2_1710338567.txt",
+      "original_name": "faq.txt",
+      "file_type": "txt",
+      "file_size": 12345,
+      "file_hash": "098f6bcd4621d373cade4e832627b4f6",
+      "content_text": "Frequently Asked Questions..." ,
+      "chunk_count": 8,
+      "created_at": "2026-03-06 08:02:47"
+    }
+  ]
+}
+```
+
+## Error Response
+
+```json
+{
+  "success": false,
+  "error": "Error al obtener documentos"
+}
+```
+
+## Implementation Details
+
+### Query Logic
+
+The endpoint uses `DocumentService::getAllDocuments()` which queries with a default limit (DocumentService.php:96-103):
+
+```php
+public function getAllDocuments($limit = 100)
+{
+    $limit = (int) $limit;
+    return $this->db->fetchAll(
+        "SELECT * FROM documents ORDER BY created_at DESC LIMIT {$limit}",
+        []
+    );
+}
+```
+
+### Result Limit
+
+By default, returns up to **100 documents** ordered by creation date (newest first). This prevents performance issues with large document collections.
+
+### Metadata Fields
+
+- **filename**: Server-generated unique name in format `{uniqid}_{timestamp}.{extension}` (DocumentService.php:44)
+- **file_hash**: MD5 hash used for duplicate detection during upload (DocumentService.php:53)
+- **chunk_count**: Updated after RAG indexing via `updateChunkCount()` (DocumentService.php:122-130)
+
+## Use Cases
+
+### Document Management Dashboard
+
+Display all uploaded documents with their processing status:
+
+```javascript
+const response = await fetch('/api/get-documents');
+const { documents } = await response.json();
+
+const totalChunks = documents.reduce((sum, doc) => sum + doc.chunk_count, 0);
+console.log(`Total indexed chunks: ${totalChunks}`);
+```
+
+### Storage Statistics
+
+Calculate total storage usage:
+
+```javascript
+const { documents } = await response.json();
+const totalBytes = documents.reduce((sum, doc) => sum + doc.file_size, 0);
+const totalMB = (totalBytes / 1024 / 1024).toFixed(2);
+
+console.log(`Total storage: ${totalMB} MB`);
+```
+
+### File Type Distribution
+
+Analyze document types:
+
+```javascript
+const typeCount = documents.reduce((acc, doc) => {
+  acc[doc.file_type] = (acc[doc.file_type] || 0) + 1;
+  return acc;
+}, {});
+
+console.log(typeCount); // { pdf: 15, docx: 8, txt: 3 }
+```
+
+## Related Endpoints
+
+- [Upload Document](/api/documents/upload) - Upload and index a new document
+- [Delete Document](/api/documents/delete) - Remove a document
+- [Get Document Content](/api/documents/get-content) - Retrieve document chunks

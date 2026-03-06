@@ -1,0 +1,180 @@
+---
+title: 'Get Conversations'
+api: 'GET /api/conversations'
+description: 'Retrieve all conversations with optional filtering by status'
+---
+
+## Endpoint
+
+```
+GET /api/conversations
+```
+
+Retrieves all conversations from the database with their latest message details. Conversations are ordered by the most recent message timestamp.
+
+## Query Parameters
+
+<ParamField query="status" type="string" optional>
+  Filter conversations by status. Valid values:
+  - `active` - Active conversations
+  - `pending_human` - Conversations waiting for human intervention
+  - `closed` - Closed conversations
+  
+  If omitted, returns all conversations regardless of status.
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the request was successful
+</ResponseField>
+
+<ResponseField name="conversations" type="array" required>
+  Array of conversation objects ordered by most recent message
+  
+  <ResponseField name="id" type="integer">
+    Unique conversation identifier
+  </ResponseField>
+  
+  <ResponseField name="phone_number" type="string">
+    WhatsApp phone number of the contact
+  </ResponseField>
+  
+  <ResponseField name="contact_name" type="string">
+    Name of the contact (if available)
+  </ResponseField>
+  
+  <ResponseField name="status" type="string">
+    Current conversation status: `active`, `pending_human`, or `closed`
+  </ResponseField>
+  
+  <ResponseField name="ai_enabled" type="integer">
+    Whether AI responses are enabled for this conversation (0 or 1)
+  </ResponseField>
+  
+  <ResponseField name="last_message_at" type="string">
+    Timestamp of the last message in ISO 8601 format
+  </ResponseField>
+  
+  <ResponseField name="created_at" type="string">
+    Timestamp when the conversation was created
+  </ResponseField>
+  
+  <ResponseField name="last_message" type="string">
+    Text content of the most recent message
+  </ResponseField>
+  
+  <ResponseField name="last_sender_type" type="string">
+    Who sent the last message: `customer`, `ai`, or `human`
+  </ResponseField>
+  
+  <ResponseField name="last_message_created_at" type="string">
+    Timestamp when the last message was sent
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the request failed (only present when `success` is false)
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X GET 'https://your-domain.com/api/conversations'
+```
+
+```bash cURL (with status filter)
+curl -X GET 'https://your-domain.com/api/conversations?status=active'
+```
+
+```javascript JavaScript
+const response = await fetch('/api/conversations');
+const data = await response.json();
+
+if (data.success) {
+  console.log(`Found ${data.conversations.length} conversations`);
+  data.conversations.forEach(conv => {
+    console.log(`${conv.contact_name}: ${conv.last_message}`);
+  });
+}
+```
+
+```php PHP
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, 'https://your-domain.com/api/conversations');
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+$response = curl_exec($ch);
+$data = json_decode($response, true);
+
+if ($data['success']) {
+    foreach ($data['conversations'] as $conversation) {
+        echo $conversation['contact_name'] . ": " . $conversation['last_message'] . "\n";
+    }
+}
+```
+
+</CodeGroup>
+
+## Response Examples
+
+### Success Response
+
+```json
+{
+  "success": true,
+  "conversations": [
+    {
+      "id": 1,
+      "phone_number": "1234567890",
+      "contact_name": "John Doe",
+      "status": "active",
+      "ai_enabled": 1,
+      "last_message_at": "2024-01-15 14:30:25",
+      "created_at": "2024-01-10 09:00:00",
+      "last_message": "Thank you for your help!",
+      "last_sender_type": "customer",
+      "last_message_created_at": "2024-01-15 14:30:25"
+    },
+    {
+      "id": 2,
+      "phone_number": "0987654321",
+      "contact_name": "Jane Smith",
+      "status": "pending_human",
+      "ai_enabled": 0,
+      "last_message_at": "2024-01-15 13:15:00",
+      "created_at": "2024-01-12 11:30:00",
+      "last_message": "I need to speak with a human agent",
+      "last_sender_type": "customer",
+      "last_message_created_at": "2024-01-15 13:15:00"
+    }
+  ]
+}
+```
+
+### Error Response
+
+```json
+{
+  "success": false,
+  "error": "Error al obtener conversaciones"
+}
+```
+
+## Implementation Details
+
+The endpoint is implemented in `api/get-conversations.php` and uses the `ConversationService::getAllConversations()` method. The query joins the `conversations` table with the `messages` table to fetch the most recent message for each conversation.
+
+Route pattern (from `index.php:161`):
+```php
+if ($requestMethod === 'GET' && ($path === '/api/conversations' || 
+    $path === '/api/get-conversations' || 
+    $path === '/api/get-conversations.php'))
+```
+
+## Notes
+
+- Results are limited to 100 conversations by default (configurable in `ConversationService.php:77`)
+- Conversations are ordered by `last_message_at` in descending order (most recent first)
+- Returns HTTP 500 status code on error

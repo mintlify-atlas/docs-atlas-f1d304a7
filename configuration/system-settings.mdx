@@ -1,0 +1,489 @@
+---
+title: 'System Settings'
+description: 'Configure bot personality, prompts, modes, and behavior settings'
+icon: 'gear'
+---
+
+## Overview
+
+System settings control the bot's personality, behavior, and operational modes. These settings are stored in the `settings` table and can be configured through the admin dashboard or directly in the database.
+
+## Settings Table Schema
+
+```sql database/schema.sql
+CREATE TABLE IF NOT EXISTS settings (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    setting_key VARCHAR(100) NOT NULL UNIQUE,
+    setting_type ENUM('text', 'boolean', 'json') DEFAULT 'text',
+    setting_value TEXT NOT NULL,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+```
+
+## Bot Mode Configuration
+
+The bot operates in two modes:
+
+<Tabs>
+  <Tab title="AI Mode">
+    **Conversational intelligence with RAG**
+    
+    ```sql
+    UPDATE settings 
+    SET setting_value = 'ai' 
+    WHERE setting_key = 'bot_mode';
+    ```
+    
+    Features:
+    - Natural language understanding
+    - RAG-powered responses from knowledge base
+    - GPT-based conversation
+    - Audio transcription with Whisper
+    - Calendar intent detection
+    - Context-aware responses
+    
+    ```php webhook.php
+    $botModeRow = $db->fetchOne(
+        "SELECT setting_value FROM settings WHERE setting_key = 'bot_mode'",
+        []
+    );
+    $botMode = $botModeRow['setting_value'] ?? 'ai';
+    ```
+  </Tab>
+  
+  <Tab title="Classic Mode">
+    **Menu-driven keyword matching**
+    
+    ```sql
+    UPDATE settings 
+    SET setting_value = 'classic' 
+    WHERE setting_key = 'bot_mode';
+    ```
+    
+    Features:
+    - Keyword-based flow navigation
+    - Menu options with numbered choices
+    - Structured conversation paths
+    - Session management
+    - Classic calendar flow
+    
+    ```php
+    $classicBot = new ClassicBotService($db, $logger);
+    $result = $classicBot->processMessage($messageText, $phoneNumber);
+    ```
+  </Tab>
+</Tabs>
+
+## System Prompt
+
+The system prompt defines the bot's personality and capabilities:
+
+```sql database/schema.sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('system_prompt', 'Eres un asistente virtual inteligente y profesional especializado en atención al cliente.
+
+CAPACIDADES PRINCIPALES:
+
+1. Información General: Responde preguntas sobre servicios, productos y consultas generales usando tu base de conocimientos.
+
+2. Base de Conocimientos RAG: Usa documentos cargados en el sistema para dar respuestas precisas y actualizadas.
+
+TONO Y ESTILO:
+
+Profesional pero cercano, respuestas concisas y directas, siempre confirma las acciones realizadas.', 'text');
+```
+
+### Loading System Prompt
+
+```php webhook.php
+$systemPromptRow = $db->fetchOne(
+    "SELECT setting_value FROM settings WHERE setting_key = 'system_prompt'",
+    []
+);
+$systemPrompt = $systemPromptRow['setting_value'] ?? 'Eres un asistente virtual útil y amigable.';
+```
+
+### Calendar Prompt Addition
+
+When calendar is enabled, calendar capabilities are added to the system prompt:
+
+```php webhook.php
+$isCalendarEnabled = $calendarConfig['enabled'];
+
+if ($isCalendarEnabled && file_exists(__DIR__ . '/prompts/calendar_prompt.txt')) {
+    $calendarPrompt = file_get_contents(__DIR__ . '/prompts/calendar_prompt.txt');
+    $systemPrompt .= "\n\n" . $calendarPrompt;
+}
+```
+
+<Info>
+  Create `prompts/calendar_prompt.txt` to add calendar-specific instructions to the AI.
+</Info>
+
+## Conversation Context
+
+### Context Messages Count
+
+Control how many previous messages are included as context:
+
+```sql
+UPDATE settings 
+SET setting_value = '5' 
+WHERE setting_key = 'context_messages_count';
+```
+
+```php webhook.php
+$contextCountRow = $db->fetchOne(
+    "SELECT setting_value FROM settings WHERE setting_key = 'context_messages_count'",
+    []
+);
+$contextMessagesCount = isset($contextCountRow['setting_value']) 
+    ? intval($contextCountRow['setting_value']) 
+    : 5;
+
+if ($contextMessagesCount > 0) {
+    $historyMessages = $db->fetchAll(
+        "SELECT sender_type, message_text FROM messages 
+         WHERE conversation_id = :conversation_id 
+         ORDER BY created_at DESC 
+         LIMIT " . intval($contextMessagesCount),
+        [':conversation_id' => $conversation['id']]
+    );
+    
+    $conversationHistory = array_map(function($msg) {
+        return [
+            'sender' => $msg['sender_type'],
+            'message_text' => $msg['message_text']
+        ];
+    }, array_reverse($historyMessages));
+}
+```
+
+<Note>
+  More context messages improve response quality but increase OpenAI costs. Recommended: 3-7 messages.
+</Note>
+
+## Welcome and Fallback Messages
+
+### Bot Greeting
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('bot_greeting', 'Hola! Soy un asistente virtual. ¿En qué puedo ayudarte?', 'text')
+ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
+```
+
+Alternative keys:
+- `welcome_message`: Alternative name for the same purpose
+- `bot_name`: Display name for the bot
+
+### Fallback Message
+
+Shown when the bot can't find relevant information:
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('bot_fallback_message', 'Lo siento, no encontré información relevante. Un operador humano te atenderá pronto.', 'text'),
+('fallback_message', 'Lo siento, no encontré información relevante. Un operador humano te atenderá pronto.', 'text')
+ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value);
+```
+
+```php webhook.php
+$fallbackMessage = 'Lo siento, no encontré información relevante sobre tu consulta. Un operador te atenderá pronto.';
+$whatsapp->sendMessage($messageData['from'], $fallbackMessage);
+```
+
+## Human Handoff Configuration
+
+### Enable Human Handoff
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('human_handoff_enabled', 'true', 'boolean')
+ON DUPLICATE KEY UPDATE setting_value = 'true';
+```
+
+### Trigger Keywords
+
+Keywords that trigger human handoff:
+
+```php webhook.php
+$humanKeywords = [
+    'hablar con humano', 
+    'hablar con una persona', 
+    'hablar con operador', 
+    'quiero un humano', 
+    'atención humana', 
+    'operador', 
+    'agente humano',
+    'hablar con alguien', 
+    'persona real', 
+    'representante'
+];
+
+$messageLower = mb_strtolower($messageData['text']);
+$isRequestingHuman = false;
+
+foreach ($humanKeywords as $keyword) {
+    if (strpos($messageLower, $keyword) !== false) {
+        $isRequestingHuman = true;
+        break;
+    }
+}
+
+if ($isRequestingHuman) {
+    $humanMessage = 'Enseguida te comunico con alguien de nuestro equipo.';
+    $whatsapp->sendMessage($messageData['from'], $humanMessage);
+    
+    $conversationService->updateConversationStatus($conversation['id'], 'pending_human');
+    $db->query(
+        'UPDATE conversations SET ai_enabled = 0 WHERE id = :id',
+        [':id' => $conversation['id']]
+    );
+}
+```
+
+<Info>
+  Conversations marked as `pending_human` will not receive AI responses until re-enabled.
+</Info>
+
+## Business Information
+
+### Business Name
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('business_name', 'Mi Negocio', 'text')
+ON DUPLICATE KEY UPDATE setting_value = 'Mi Negocio';
+```
+
+### Timezone
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('timezone', 'America/Bogota', 'text')
+ON DUPLICATE KEY UPDATE setting_value = 'America/Bogota';
+```
+
+```php config/config.php
+'app' => [
+    'base_url' => getenv('APP_BASE_URL') ?: 'http://localhost',
+    'timezone' => 'America/Bogota',
+    'debug' => getenv('APP_DEBUG') === 'true'
+]
+```
+
+## RAG Configuration
+
+### Confidence Threshold
+
+Minimum similarity score for using RAG results:
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('confidence_threshold', '0.7', 'text')
+ON DUPLICATE KEY UPDATE setting_value = '0.7';
+```
+
+```php webhook.php
+if ($result['response'] && $result['confidence'] >= Config::get('rag.similarity_threshold')) {
+    $whatsapp->sendMessage($conversation['phone_number'], $result['response']);
+}
+```
+
+<Note>
+  Range: 0.0 to 1.0
+  - 0.6-0.7: Relaxed matching (more results, less precision)
+  - 0.7-0.8: Balanced (recommended)
+  - 0.8-0.9: Strict matching (fewer results, higher precision)
+</Note>
+
+### Max Results
+
+Number of similar chunks to retrieve:
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('max_results', '5', 'text')
+ON DUPLICATE KEY UPDATE setting_value = '5';
+```
+
+### Chunk Size
+
+Characters per document chunk:
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('chunk_size', '1000', 'text')
+ON DUPLICATE KEY UPDATE setting_value = '1000';
+```
+
+## Auto-Reply Configuration
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('auto_reply', 'true', 'boolean')
+ON DUPLICATE KEY UPDATE setting_value = 'true';
+```
+
+When disabled, the bot will receive and store messages but not send automatic responses.
+
+## OpenAI Status Tracking
+
+The system tracks OpenAI API status:
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('openai_status', 'active', 'text'),
+('openai_last_error', '', 'text'),
+('openai_error_timestamp', '', 'text')
+ON DUPLICATE KEY UPDATE setting_key = setting_key;
+```
+
+### Insufficient Funds Detection
+
+```php webhook.php
+function handleInsufficientFunds($db, $e) {
+    if (strpos($e->getMessage(), 'INSUFFICIENT_FUNDS') !== false) {
+        $db->query(
+            "INSERT INTO settings (setting_key, setting_value) 
+             VALUES ('openai_status', 'insufficient_funds') 
+             ON DUPLICATE KEY UPDATE setting_value = 'insufficient_funds'",
+            []
+        );
+        $db->query(
+            "INSERT INTO settings (setting_key, setting_value) 
+             VALUES ('openai_error_timestamp', NOW()) 
+             ON DUPLICATE KEY UPDATE setting_value = NOW()",
+            []
+        );
+        return true;
+    }
+    return false;
+}
+
+try {
+    $result = $rag->generateResponse(...);
+} catch (\Exception $e) {
+    handleInsufficientFunds($db, $e);
+}
+```
+
+## Timeout Configuration
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('timeout', '30', 'text')
+ON DUPLICATE KEY UPDATE setting_value = '30';
+```
+
+Controls HTTP request timeout in seconds for external API calls.
+
+## Temperature Setting
+
+Controls AI response creativity:
+
+```sql
+INSERT INTO settings (setting_key, setting_value, setting_type) VALUES
+('temperature', '0.7', 'text')
+ON DUPLICATE KEY UPDATE setting_value = '0.7';
+```
+
+See [OpenAI Configuration](/configuration/openai-setup#model-parameters) for details on temperature values.
+
+## All Available Settings
+
+Complete list of system settings:
+
+| Setting Key | Type | Default | Description |
+|------------|------|---------|-------------|
+| `bot_mode` | text | `ai` | Bot operation mode: `ai` or `classic` |
+| `bot_name` | text | `WhatsApp Bot` | Display name for the bot |
+| `bot_greeting` | text | `Hola! Soy un asistente virtual...` | Initial greeting message |
+| `welcome_message` | text | Same as greeting | Alternative welcome message |
+| `bot_fallback_message` | text | `Lo siento, no encontré...` | Fallback when no answer found |
+| `fallback_message` | text | Same as above | Alternative fallback message |
+| `system_prompt` | text | Long prompt | AI personality and instructions |
+| `human_handoff_enabled` | boolean | `true` | Allow human takeover |
+| `context_messages_count` | text | `5` | Number of previous messages as context |
+| `business_name` | text | `Mi Negocio` | Business display name |
+| `timezone` | text | `America/Bogota` | System timezone |
+| `calendar_enabled` | boolean | `false` | Enable/disable calendar features |
+| `confidence_threshold` | text | `0.7` | RAG similarity threshold (0.0-1.0) |
+| `max_results` | text | `5` | Max RAG results to retrieve |
+| `chunk_size` | text | `1000` | Document chunk size in characters |
+| `auto_reply` | boolean | `true` | Send automatic responses |
+| `temperature` | text | `0.7` | OpenAI temperature (0.0-2.0) |
+| `timeout` | text | `30` | API timeout in seconds |
+| `openai_status` | text | `active` | OpenAI API status tracking |
+| `openai_last_error` | text | `` | Last OpenAI error message |
+| `openai_error_timestamp` | text | `` | When the last error occurred |
+
+## Getting Settings in Code
+
+### Using CredentialService
+
+```php
+$credentialService = new CredentialService($db, $encryption);
+$value = $credentialService->getSetting('bot_name', 'Default Bot');
+```
+
+### Direct Database Query
+
+```php
+$row = $db->fetchOne(
+    "SELECT setting_value FROM settings WHERE setting_key = :key",
+    [':key' => 'bot_mode']
+);
+$botMode = $row['setting_value'] ?? 'ai';
+```
+
+### Batch Settings Retrieval
+
+```php
+$settings = $db->fetchAll(
+    "SELECT setting_key, setting_value FROM settings",
+    []
+);
+
+$settingsMap = [];
+foreach ($settings as $setting) {
+    $settingsMap[$setting['setting_key']] = $setting['setting_value'];
+}
+
+$botMode = $settingsMap['bot_mode'] ?? 'ai';
+$greeting = $settingsMap['bot_greeting'] ?? 'Hello!';
+```
+
+## Best Practices
+
+<Warning>
+  **Important considerations**
+  
+  - Test changes in a development environment first
+  - Back up settings before making bulk changes
+  - Document custom system prompts
+  - Monitor OpenAI token usage when adjusting context count
+  - Keep timezone consistent across all calendar settings
+</Warning>
+
+<Info>
+  **Optimization tips**
+  
+  - Use lower `context_messages_count` (3-5) to reduce costs
+  - Set appropriate `confidence_threshold` for your knowledge base
+  - Adjust `temperature` based on desired response style
+  - Enable `auto_reply` only when bot is production-ready
+  - Use Classic mode for structured flows, AI mode for flexibility
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="WhatsApp Setup" icon="whatsapp" href="/configuration/whatsapp-setup">
+    Configure WhatsApp Business API
+  </Card>
+  <Card title="OpenAI Setup" icon="brain" href="/configuration/openai-setup">
+    Set up AI capabilities
+  </Card>
+</CardGroup>

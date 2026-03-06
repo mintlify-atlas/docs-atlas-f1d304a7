@@ -1,0 +1,310 @@
+---
+title: 'Check Updates'
+api: 'GET /api/check-updates.php'
+description: 'Poll for real-time updates to conversations and messages'
+---
+
+## Overview
+
+The updates checking system provides three endpoints for polling real-time changes:
+
+1. **check-updates.php**: Check for new messages in conversations
+2. **check-conversation-updates.php**: Check for conversation metadata changes
+3. **check-openai-status.php**: Monitor OpenAI service status
+
+---
+
+## Check Message Updates
+
+Poll for new messages in a specific conversation or across all conversations.
+
+### Endpoint
+
+```
+GET /api/check-updates.php
+```
+
+### Query Parameters
+
+<ParamField query="last_check" type="string" required>
+  Timestamp of the last check in `Y-m-d H:i:s` format
+</ParamField>
+
+<ParamField query="conversation_id" type="string">
+  Specific conversation ID to check. If omitted, checks all conversations.
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the request was successful
+</ResponseField>
+
+<ResponseField name="has_update" type="boolean">
+  Present when checking a specific conversation. True if new messages exist.
+</ResponseField>
+
+<ResponseField name="has_updates" type="boolean">
+  Present when checking all conversations. True if any conversation has updates.
+</ResponseField>
+
+<ResponseField name="conversation_id" type="string">
+  Echoed conversation ID (when checking specific conversation)
+</ResponseField>
+
+<ResponseField name="updated_conversations" type="array">
+  Array of conversation IDs with new messages (when checking all conversations)
+</ResponseField>
+
+<ResponseField name="server_time" type="string" required>
+  Current server timestamp in `Y-m-d H:i:s` format
+</ResponseField>
+
+### Example Requests
+
+<CodeGroup>
+
+```bash Check Specific Conversation
+curl "https://yourdomain.com/api/check-updates.php?last_check=2024-03-06%2010:30:00&conversation_id=123"
+```
+
+```bash Check All Conversations
+curl "https://yourdomain.com/api/check-updates.php?last_check=2024-03-06%2010:30:00"
+```
+
+</CodeGroup>
+
+### Example Responses
+
+<CodeGroup>
+
+```json Specific Conversation - No Updates
+{
+  "success": true,
+  "has_update": false,
+  "conversation_id": "123",
+  "server_time": "2024-03-06 10:35:00"
+}
+```
+
+```json Specific Conversation - Has Updates
+{
+  "success": true,
+  "has_update": true,
+  "conversation_id": "123",
+  "server_time": "2024-03-06 10:35:00"
+}
+```
+
+```json All Conversations - Has Updates
+{
+  "success": true,
+  "has_updates": true,
+  "updated_conversations": ["123", "456", "789"],
+  "server_time": "2024-03-06 10:35:00"
+}
+```
+
+```json Missing last_check Parameter
+{
+  "success": true,
+  "has_update": false,
+  "has_updates": false,
+  "server_time": "2024-03-06 10:35:00"
+}
+```
+
+</CodeGroup>
+
+---
+
+## Check Conversation Updates
+
+Monitor changes to conversation metadata (status, last message timestamp).
+
+### Endpoint
+
+```
+GET /api/check-conversation-updates.php
+```
+
+### Query Parameters
+
+<ParamField query="last_check" type="string" required>
+  Timestamp of the last check in `Y-m-d H:i:s` format
+</ParamField>
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the request was successful
+</ResponseField>
+
+<ResponseField name="has_updates" type="boolean" required>
+  True if any conversations have been updated
+</ResponseField>
+
+<ResponseField name="updated_conversations" type="array" required>
+  Array of conversation objects that have been updated
+  
+  <ResponseField name="id" type="string">
+    Conversation ID
+  </ResponseField>
+  
+  <ResponseField name="last_message_at" type="string">
+    Timestamp of the last message
+  </ResponseField>
+  
+  <ResponseField name="status" type="string">
+    Conversation status (e.g., "active", "archived")
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="server_time" type="string" required>
+  Current server timestamp
+</ResponseField>
+
+### Example Response
+
+<CodeGroup>
+
+```json Has Updates
+{
+  "success": true,
+  "has_updates": true,
+  "updated_conversations": [
+    {
+      "id": "123",
+      "last_message_at": "2024-03-06 10:34:22",
+      "status": "active"
+    },
+    {
+      "id": "456",
+      "last_message_at": "2024-03-06 10:33:15",
+      "status": "active"
+    }
+  ],
+  "server_time": "2024-03-06 10:35:00"
+}
+```
+
+```json No Updates
+{
+  "success": true,
+  "has_updates": false,
+  "updated_conversations": [],
+  "server_time": "2024-03-06 10:35:00"
+}
+```
+
+```json Error - Missing Parameter
+{
+  "success": false,
+  "error": "Error al verificar actualizaciones"
+}
+```
+
+</CodeGroup>
+
+---
+
+## Check OpenAI Status
+
+Monitor the OpenAI service status, particularly for insufficient funds conditions.
+
+### Endpoint
+
+```
+GET /api/check-openai-status.php
+```
+
+### Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the request was successful
+</ResponseField>
+
+<ResponseField name="status" type="string" required>
+  Current OpenAI service status
+  - `active`: Service is operational
+  - `insufficient_funds`: Account has insufficient funds
+</ResponseField>
+
+<ResponseField name="can_enable_ai" type="boolean" required>
+  Whether AI features can be enabled (false when insufficient funds)
+</ResponseField>
+
+### Example Response
+
+<CodeGroup>
+
+```json Operational
+{
+  "success": true,
+  "status": "active",
+  "can_enable_ai": true
+}
+```
+
+```json Insufficient Funds
+{
+  "success": true,
+  "status": "insufficient_funds",
+  "can_enable_ai": false
+}
+```
+
+```json Error Response
+{
+  "success": false,
+  "error": "Error al verificar estado de OpenAI"
+}
+```
+
+</CodeGroup>
+
+---
+
+## Polling Best Practices
+
+### Recommended Polling Intervals
+
+- **Message Updates**: 2-5 seconds for active conversations
+- **Conversation Updates**: 5-10 seconds for conversation list
+- **OpenAI Status**: 30-60 seconds or on-demand
+
+### Efficient Polling Pattern
+
+```javascript
+let lastCheck = new Date().toISOString().slice(0, 19).replace('T', ' ');
+
+setInterval(async () => {
+  const response = await fetch(
+    `/api/check-updates.php?last_check=${encodeURIComponent(lastCheck)}`
+  );
+  const data = await response.json();
+  
+  if (data.has_updates) {
+    // Fetch updated conversations
+    data.updated_conversations.forEach(id => {
+      fetchConversationMessages(id);
+    });
+  }
+  
+  // Update timestamp for next poll
+  lastCheck = data.server_time;
+}, 3000);
+```
+
+### Error Handling
+
+- Always use the `server_time` from responses for the next `last_check`
+- Implement exponential backoff on errors
+- Handle missing `last_check` gracefully (returns no updates)
+
+## Use Cases
+
+- **Real-time Dashboard**: Auto-refresh conversation list
+- **Live Chat**: Display incoming messages without page refresh
+- **Status Monitoring**: Alert users when OpenAI service is unavailable
+- **Multi-user Sync**: Keep multiple browser tabs synchronized

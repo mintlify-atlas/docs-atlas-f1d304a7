@@ -1,80 +1,182 @@
 ---
 title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+description: "Get your WhatsApp RAG Bot up and running in 10 minutes"
 ---
 
-## Get started in three steps
+## Get Started in 10 Minutes
 
-Get your documentation site running locally and make your first customization.
+This quickstart guide will help you set up a fully functional WhatsApp bot with AI-powered responses in just a few steps.
 
-### Step 1: Set up your local environment
+## Prerequisites
 
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
+Before you begin, make sure you have:
+
+- PHP 7.4 or higher installed
+- MySQL 5.7+ database
+- A WhatsApp Business API account
+- An OpenAI API key
+- Composer for dependency management
+
+## Step 1: Clone and Install
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/JorgeForero02/Bot-whatsapp-php.git
+    cd Bot-whatsapp-php
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    ```bash
+    composer install
+    ```
+  </Step>
+
+  <Step title="Set up the database">
+    Create a MySQL database and import the schema:
     
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
+    ```bash
+    mysql -u your_user -p your_database < database/schema.sql
+    ```
+  </Step>
+</Steps>
 
-### Step 2: Deploy your changes
+## Step 2: Configure Environment
 
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+Create a `.env` file or configure `config/config.php` with your credentials:
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+```php config/config.php
+return [
+    'database' => [
+        'host' => 'localhost',
+        'dbname' => 'whatsapp_rag_bot',
+        'user' => 'your_db_user',
+        'password' => 'your_db_password'
+    ],
+    'whatsapp' => [
+        'phone_number_id' => 'YOUR_PHONE_NUMBER_ID',
+        'access_token' => 'YOUR_WHATSAPP_ACCESS_TOKEN',
+        'verify_token' => 'YOUR_VERIFY_TOKEN',
+        'app_secret' => 'YOUR_APP_SECRET'
+    ],
+    'openai' => [
+        'api_key' => 'YOUR_OPENAI_API_KEY',
+        'model' => 'gpt-4o-mini',
+        'embedding_model' => 'text-embedding-ada-002'
+    ]
+];
+```
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  See [Configuration Guide](/configuration/credentials) for detailed setup instructions.
 </Note>
+
+## Step 3: Set Up WhatsApp Webhook
+
+<Steps>
+  <Step title="Expose your local server">
+    For local development, use ngrok to expose your server:
+    
+    ```bash
+    ngrok http 8000
+    ```
+    
+    Copy the HTTPS URL provided (e.g., `https://abc123.ngrok.io`)
+  </Step>
+
+  <Step title="Configure webhook in Meta">
+    1. Go to [Meta Developer Console](https://developers.facebook.com)
+    2. Navigate to your WhatsApp app > Configuration > Webhook
+    3. Set callback URL: `https://your-domain.com/webhook`
+    4. Set verify token: Match what you set in config
+    5. Subscribe to `messages` webhook field
+  </Step>
+
+  <Step title="Verify webhook">
+    Meta will send a GET request to verify. Your bot will automatically respond if configured correctly.
+  </Step>
+</Steps>
+
+## Step 4: Upload Knowledge Base
+
+Upload documents to power your RAG system:
+
+<CodeGroup>
+```bash cURL
+curl -X POST http://localhost:8000/api/upload \
+  -F "document=@path/to/your/document.pdf"
+```
+
+```javascript JavaScript
+const formData = new FormData();
+formData.append('document', fileInput.files[0]);
+
+fetch('/api/upload', {
+  method: 'POST',
+  body: formData
+});
+```
+</CodeGroup>
+
+The system will automatically:
+- Extract text from PDF, DOCX, or TXT files
+- Split into chunks for RAG processing
+- Generate embeddings using OpenAI
+- Store vectors in MySQL database
+
+## Step 5: Test Your Bot
+
+Send a message to your WhatsApp number and watch your bot respond!
+
+```
+User: What are your business hours?
+Bot: [AI-powered response based on your uploaded documents]
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Configure System Settings" icon="gear" href="/configuration/system-settings">
+    Customize bot personality and behavior
+  </Card>
+  
+  <Card title="Set Up Calendar" icon="calendar" href="/configuration/google-calendar">
+    Enable appointment scheduling
+  </Card>
+  
+  <Card title="Build Custom Flows" icon="diagram-project" href="/features/flow-builder">
+    Create rule-based conversation flows
+  </Card>
+  
+  <Card title="View API Reference" icon="code" href="/api/webhook">
+    Explore the complete API documentation
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Webhook verification fails">
+    - Ensure your verify token matches in both config and Meta console
+    - Check that your webhook URL is publicly accessible
+    - Verify SSL certificate is valid
+  </Accordion>
+  
+  <Accordion title="Bot doesn't respond">
+    - Check webhook logs in `logs/` directory
+    - Verify WhatsApp credentials are correct
+    - Ensure OpenAI API key has sufficient quota
+    - Test database connection
+  </Accordion>
+  
+  <Accordion title="RAG responses are inaccurate">
+    - Upload more relevant documents
+    - Adjust confidence threshold in settings
+    - Check document processing in database `vectors` table
+  </Accordion>
+</AccordionGroup>
+
+<Card title="Need more help?" icon="book" href="/deployment/troubleshooting">
+  Check the complete troubleshooting guide
+</Card>

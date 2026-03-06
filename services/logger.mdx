@@ -1,0 +1,441 @@
+---
+title: Logger
+description: Simple file-based logging system for tracking application events, errors, and debugging information
+icon: file-lines
+---
+
+## Overview
+
+The `Logger` class provides a lightweight file-based logging system for the WhatsApp RAG Bot. It supports multiple log levels and automatically organizes logs by date in the `logs/` directory.
+
+<Note>
+Logs are stored as plain text files with one entry per line, making them easy to parse and analyze with standard Unix tools like `grep`, `tail`, and `awk`.
+</Note>
+
+## Initialization
+
+```php
+use App\Core\Logger;
+
+// Initialize with default path (logs/ directory)
+$logger = new Logger();
+
+// Or specify a custom log directory
+$logger = new Logger('/var/log/whatsapp-bot');
+```
+
+The Logger automatically creates the log directory if it doesn't exist with `0755` permissions.
+
+## Log Levels
+
+The Logger supports four standard log levels:
+
+| Level | Method | Use Case |
+|-------|--------|----------|
+| **INFO** | `info()` | General application events, successful operations |
+| **WARNING** | `warning()` | Warning conditions, non-critical issues |
+| **ERROR** | `error()` | Error conditions, failed operations |
+| **DEBUG** | `debug()` | Detailed debugging information |
+
+## Basic Logging
+
+<CodeGroup>
+```php Info Level
+use App\Core\Logger;
+
+$logger = new Logger();
+
+// Log successful operations
+$logger->info('WhatsApp message sent successfully');
+$logger->info('Document uploaded and processed');
+$logger->info('User conversation started', ['phone' => '+1234567890']);
+```
+
+```php Error Level
+use App\Core\Logger;
+
+$logger = new Logger();
+
+// Log errors
+$logger->error('Failed to connect to database');
+$logger->error('OpenAI API request failed', [
+    'status_code' => 429,
+    'error' => 'Rate limit exceeded'
+]);
+```
+
+```php Warning Level
+use App\Core\Logger;
+
+$logger = new Logger();
+
+// Log warnings
+$logger->warning('RAG confidence score below threshold', [
+    'score' => 0.45,
+    'threshold' => 0.7
+]);
+$logger->warning('Conversation approaching message limit');
+```
+
+```php Debug Level
+use App\Core\Logger;
+
+$logger = new Logger();
+
+// Log debug information
+$logger->debug('Embedding generation started', [
+    'chunks' => 15,
+    'model' => 'text-embedding-ada-002'
+]);
+$logger->debug('Query vector created', ['dimension' => 1536]);
+```
+</CodeGroup>
+
+## Contextual Logging
+
+Add structured context to log entries for better debugging:
+
+```php
+use App\Core\Logger;
+
+$logger = new Logger();
+
+// Log with context array
+$logger->info('Message received', [
+    'from' => '+1234567890',
+    'message_id' => 'wamid.HBgLM...',
+    'type' => 'text',
+    'timestamp' => time()
+]);
+
+// Context is JSON-encoded
+$logger->error('API request failed', [
+    'endpoint' => 'https://graph.facebook.com/v17.0/messages',
+    'status' => 401,
+    'response' => 'Invalid access token'
+]);
+```
+
+## Log File Structure
+
+### File Organization
+
+Logs are stored in daily files with the format `YYYY-MM-DD.log`:
+
+```
+logs/
+├── 2026-03-04.log
+├── 2026-03-05.log
+└── 2026-03-06.log
+```
+
+### Log Entry Format
+
+Each log entry follows this format:
+
+```
+[YYYY-MM-DD HH:MM:SS] [LEVEL] Message {"context":"json"}
+```
+
+**Example log file** (`logs/2026-03-06.log`):
+
+```
+[2026-03-06 10:15:23] [INFO] WhatsApp webhook received {"type":"message","phone":"+1234567890"}
+[2026-03-06 10:15:24] [INFO] Processing text message {"length":42,"conversation_id":156}
+[2026-03-06 10:15:25] [DEBUG] RAG search initiated {"query":"product pricing","chunks":5}
+[2026-03-06 10:15:26] [INFO] AI response generated {"confidence":0.87,"tokens":234}
+[2026-03-06 10:15:27] [INFO] Message sent to user {"message_id":"wamid.HBgL..."}
+[2026-03-06 10:20:15] [ERROR] OpenAI API error {"status_code":429,"error":"Rate limit exceeded"}
+[2026-03-06 10:20:16] [WARNING] Falling back to cached response
+```
+
+## Real-World Examples
+
+<CodeGroup>
+```php WhatsApp Message Processing
+use App\Core\Logger;
+use App\Services\WhatsAppService;
+
+$logger = new Logger();
+
+try {
+    $logger->info('Webhook received', [
+        'from' => $phoneNumber,
+        'type' => $messageType
+    ]);
+    
+    // Process message
+    $response = $whatsapp->sendMessage($phoneNumber, $reply);
+    
+    $logger->info('Message sent successfully', [
+        'to' => $phoneNumber,
+        'message_id' => $response['messages'][0]['id']
+    ]);
+    
+} catch (Exception $e) {
+    $logger->error('Failed to send message', [
+        'error' => $e->getMessage(),
+        'phone' => $phoneNumber
+    ]);
+}
+```
+
+```php RAG Query Processing
+use App\Core\Logger;
+use App\Services\RAGService;
+
+$logger = new Logger();
+$rag = new RAGService();
+
+$logger->debug('Starting RAG query', [
+    'query' => $userMessage,
+    'conversation_id' => $conversationId
+]);
+
+$results = $rag->search($userMessage, 5);
+
+$logger->info('RAG search completed', [
+    'results_count' => count($results),
+    'top_score' => $results[0]['score'] ?? 0
+]);
+
+if (empty($results) || $results[0]['score'] < 0.7) {
+    $logger->warning('Low confidence RAG results', [
+        'score' => $results[0]['score'] ?? 0,
+        'threshold' => 0.7
+    ]);
+}
+```
+
+```php Database Operations
+use App\Core\Logger;
+use App\Core\Database;
+
+$logger = new Logger();
+$db = Database::getInstance();
+
+$logger->debug('Inserting document', [
+    'filename' => $filename,
+    'size' => $fileSize
+]);
+
+try {
+    $db->beginTransaction();
+    
+    $docId = $db->insert('documents', $documentData);
+    $logger->info('Document inserted', ['id' => $docId]);
+    
+    foreach ($chunks as $index => $chunk) {
+        $db->insert('vectors', [
+            'document_id' => $docId,
+            'chunk_index' => $index,
+            'chunk_text' => $chunk
+        ]);
+    }
+    
+    $db->commit();
+    $logger->info('Document processing completed', [
+        'document_id' => $docId,
+        'chunks' => count($chunks)
+    ]);
+    
+} catch (Exception $e) {
+    $db->rollback();
+    $logger->error('Document processing failed', [
+        'error' => $e->getMessage(),
+        'file' => $filename
+    ]);
+}
+```
+
+```php API Error Handling
+use App\Core\Logger;
+use App\Services\OpenAIService;
+
+$logger = new Logger();
+$openai = new OpenAIService();
+
+try {
+    $logger->debug('OpenAI API request', [
+        'model' => 'gpt-3.5-turbo',
+        'messages' => count($messages)
+    ]);
+    
+    $response = $openai->chat($messages);
+    
+    $logger->info('OpenAI response received', [
+        'tokens' => $response['usage']['total_tokens'],
+        'finish_reason' => $response['choices'][0]['finish_reason']
+    ]);
+    
+} catch (Exception $e) {
+    $logger->error('OpenAI API error', [
+        'error' => $e->getMessage(),
+        'code' => $e->getCode()
+    ]);
+    
+    // Log to settings for admin dashboard
+    $db->update('settings', 
+        ['setting_value' => $e->getMessage()],
+        'setting_key = "openai_last_error"'
+    );
+}
+```
+</CodeGroup>
+
+## Log Analysis
+
+Use standard Unix tools to analyze logs:
+
+<CodeGroup>
+```bash View Recent Logs
+# View last 50 log entries
+tail -n 50 logs/2026-03-06.log
+
+# Follow logs in real-time
+tail -f logs/2026-03-06.log
+```
+
+```bash Filter by Level
+# Show only errors
+grep '\[ERROR\]' logs/2026-03-06.log
+
+# Show errors and warnings
+grep -E '\[(ERROR|WARNING)\]' logs/2026-03-06.log
+```
+
+```bash Search by Content
+# Find all WhatsApp-related logs
+grep 'WhatsApp' logs/2026-03-06.log
+
+# Find logs for specific phone number
+grep '+1234567890' logs/2026-03-06.log
+```
+
+```bash Count Errors
+# Count errors today
+grep -c '\[ERROR\]' logs/2026-03-06.log
+
+# Count errors this week
+grep -c '\[ERROR\]' logs/2026-03-*.log
+```
+</CodeGroup>
+
+## API Reference
+
+### `__construct(string $logPath = null)`
+
+Initializes the logger with a log directory path.
+
+**Location**: `src/Core/Logger.php:9`
+
+**Parameters**:
+- `$logPath` (string, optional): Path to log directory. Defaults to `logs/` in project root.
+
+**Behavior**: Creates directory if it doesn't exist with `0755` permissions
+
+---
+
+### `log(string $message, string $level = 'INFO', array $context = [])`
+
+Writes a log entry with the specified level and context.
+
+**Location**: `src/Core/Logger.php:18`
+
+**Parameters**:
+- `$message` (string): Log message
+- `$level` (string): Log level (INFO, WARNING, ERROR, DEBUG)
+- `$context` (array): Optional context data (JSON-encoded)
+
+---
+
+### `info(string $message, array $context = [])`
+
+Logs an informational message.
+
+**Location**: `src/Core/Logger.php:35`
+
+**Parameters**:
+- `$message` (string): Log message
+- `$context` (array): Optional context data
+
+---
+
+### `error(string $message, array $context = [])`
+
+Logs an error message.
+
+**Location**: `src/Core/Logger.php:40`
+
+**Parameters**:
+- `$message` (string): Error description
+- `$context` (array): Optional error details
+
+---
+
+### `debug(string $message, array $context = [])`
+
+Logs a debug message.
+
+**Location**: `src/Core/Logger.php:45`
+
+**Parameters**:
+- `$message` (string): Debug information
+- `$context` (array): Optional debug data
+
+---
+
+### `warning(string $message, array $context = [])`
+
+Logs a warning message.
+
+**Location**: `src/Core/Logger.php:50`
+
+**Parameters**:
+- `$message` (string): Warning description
+- `$context` (array): Optional warning details
+
+## Best Practices
+
+<Card title="Use Appropriate Levels" icon="layer-group">
+Use INFO for normal operations, WARNING for potential issues, ERROR for failures, and DEBUG for development.
+</Card>
+
+<Card title="Add Context" icon="circle-info">
+Always include relevant context (IDs, timestamps, values) to make debugging easier.
+</Card>
+
+<Card title="Log Rotation" icon="rotate">
+Implement log rotation to prevent disk space issues. Consider using `logrotate` on Linux.
+</Card>
+
+<Card title="Sensitive Data" icon="eye-slash">
+Never log sensitive data like passwords, API keys, or full credit card numbers.
+</Card>
+
+## Log Rotation
+
+On Linux systems, use `logrotate` to manage log files:
+
+```bash /etc/logrotate.d/whatsapp-bot
+/path/to/whatsapp-rag-bot/logs/*.log {
+    daily
+    rotate 30
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0644 www-data www-data
+}
+```
+
+## Related Services
+
+<CardGroup cols={2}>
+  <Card title="Database" icon="database" href="/services/database">
+    Log database operations and errors
+  </Card>
+  <Card title="Error Handling" icon="triangle-exclamation" href="/deployment/troubleshooting">
+    Exception handling and error recovery
+  </Card>
+</CardGroup>

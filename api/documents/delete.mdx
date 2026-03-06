@@ -1,0 +1,266 @@
+---
+title: 'Delete Document'
+api: 'DELETE /api/delete-document'
+description: 'Delete a document and all its associated vector embeddings'
+---
+
+## Overview
+
+This endpoint permanently deletes a document from the system, including:
+
+1. The physical file from storage
+2. The document record from the database
+3. All associated vector embeddings and chunks (via cascade delete)
+
+This ensures complete cleanup and prevents orphaned data in the RAG system.
+
+## Request
+
+<ParamField query="id" type="integer" required>
+  The unique identifier of the document to delete
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates whether the deletion succeeded
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Success message confirming deletion
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the deletion failed
+</ResponseField>
+
+## Example
+
+<CodeGroup>
+
+```bash cURL
+curl -X DELETE "https://your-domain.com/api/delete-document?id=42"
+```
+
+```javascript JavaScript
+const documentId = 42;
+
+const response = await fetch(`/api/delete-document?id=${documentId}`, {
+  method: 'DELETE'
+});
+
+const result = await response.json();
+if (result.success) {
+  console.log('Document deleted successfully');
+}
+```
+
+```python Python
+import requests
+
+document_id = 42
+response = requests.delete(
+    f'https://your-domain.com/api/delete-document?id={document_id}'
+)
+
+result = response.json()
+if result['success']:
+    print('Document deleted successfully')
+```
+
+```php PHP
+$documentId = 42;
+
+$curl = curl_init();
+curl_setopt_array($curl, [
+    CURLOPT_URL => "https://your-domain.com/api/delete-document?id={$documentId}",
+    CURLOPT_CUSTOMREQUEST => 'DELETE',
+    CURLOPT_RETURNTRANSFER => true
+]);
+
+$response = curl_exec($curl);
+$result = json_decode($response, true);
+
+if ($result['success']) {
+    echo 'Document deleted successfully';
+}
+```
+
+</CodeGroup>
+
+## Success Response
+
+```json
+{
+  "success": true,
+  "message": "Document deleted successfully"
+}
+```
+
+## Error Responses
+
+### Missing ID Parameter
+
+```json
+{
+  "success": false,
+  "error": "Error al eliminar documento"
+}
+```
+
+### Document Not Found
+
+```json
+{
+  "success": false,
+  "error": "Error al eliminar documento"
+}
+```
+
+## Implementation Details
+
+### Deletion Process
+
+The endpoint follows a multi-step deletion process (DocumentService.php:105-120):
+
+```php
+public function deleteDocument($id)
+{
+    // 1. Fetch document to get file path
+    $document = $this->getDocument($id);
+    
+    if (!$document) {
+        throw new \RuntimeException('Document not found');
+    }
+
+    // 2. Delete physical file
+    $filepath = $this->uploadPath . '/' . $document['filename'];
+    if (file_exists($filepath)) {
+        unlink($filepath);
+    }
+
+    // 3. Delete database record (cascades to vectors)
+    return $this->db->delete('documents', 'id = :id', [':id' => $id]);
+}
+```
+
+### Cascade Deletion
+
+When the document record is deleted from the `documents` table, the database automatically deletes all related records in the `vectors` table through foreign key constraints. This ensures:
+
+- All text chunks are removed
+- All vector embeddings are removed
+- No orphaned data remains in the system
+
+### File System Cleanup
+
+The physical file is deleted from the uploads directory (DocumentService.php:113-117):
+
+```php
+$filepath = $this->uploadPath . '/' . $document['filename'];
+
+if (file_exists($filepath)) {
+    unlink($filepath);
+}
+```
+
+If the file doesn't exist (e.g., manually deleted), the operation continues without error.
+
+### Error Handling
+
+The endpoint validates the document ID and throws appropriate errors (api/delete-document.php:12-16):
+
+```php
+$id = $_GET['id'] ?? null;
+
+if (!$id) {
+    throw new \InvalidArgumentException('Document ID required');
+}
+```
+
+## Data Cleanup Summary
+
+| Resource | Action | Location |
+|----------|--------|----------|
+| Physical File | Deleted from filesystem | `{uploadPath}/{filename}` |
+| Document Record | Deleted from database | `documents` table |
+| Text Chunks | Cascade deleted | `vectors` table |
+| Vector Embeddings | Cascade deleted | `vectors` table |
+
+## Use Cases
+
+### Bulk Deletion
+
+Delete multiple documents:
+
+```javascript
+const documentIds = [42, 43, 44];
+
+const deletions = documentIds.map(id =>
+  fetch(`/api/delete-document?id=${id}`, { method: 'DELETE' })
+    .then(r => r.json())
+);
+
+const results = await Promise.all(deletions);
+const successful = results.filter(r => r.success).length;
+
+console.log(`Deleted ${successful}/${documentIds.length} documents`);
+```
+
+### Cleanup Old Documents
+
+Delete documents older than a certain date:
+
+```javascript
+// First, get all documents
+const { documents } = await fetch('/api/get-documents').then(r => r.json());
+
+// Filter documents older than 90 days
+const cutoffDate = new Date();
+cutoffDate.setDate(cutoffDate.getDate() - 90);
+
+const oldDocs = documents.filter(doc => 
+  new Date(doc.created_at) < cutoffDate
+);
+
+// Delete each old document
+for (const doc of oldDocs) {
+  await fetch(`/api/delete-document?id=${doc.id}`, { method: 'DELETE' });
+}
+
+console.log(`Cleaned up ${oldDocs.length} old documents`);
+```
+
+### Storage Management
+
+Free up space by removing large documents:
+
+```javascript
+const { documents } = await fetch('/api/get-documents').then(r => r.json());
+
+// Find documents larger than 10MB
+const largeDocs = documents.filter(doc => doc.file_size > 10 * 1024 * 1024);
+
+console.log(`Found ${largeDocs.length} documents larger than 10MB`);
+
+// Delete after user confirmation
+for (const doc of largeDocs) {
+  await fetch(`/api/delete-document?id=${doc.id}`, { method: 'DELETE' });
+}
+```
+
+## Important Notes
+
+<Warning>
+  Deletion is **permanent and irreversible**. The document file, database record, and all vector embeddings are completely removed from the system.
+</Warning>
+
+<Info>
+  If the document has been referenced in WhatsApp conversation history, those references will remain but the document content will no longer be retrievable for future RAG queries.
+</Info>
+
+## Related Endpoints
+
+- [Get Documents](/api/documents/get-documents) - List all documents
+- [Upload Document](/api/documents/upload) - Upload a new document
+- [Get Document Content](/api/documents/get-content) - View document content before deletion

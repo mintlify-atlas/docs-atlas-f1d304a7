@@ -1,0 +1,347 @@
+---
+title: 'WhatsApp Business API Setup'
+description: 'Configure WhatsApp Business API credentials and webhook integration'
+icon: 'whatsapp'
+---
+
+## Prerequisites
+
+Before configuring WhatsApp integration, you need:
+
+- A Meta Business Account
+- WhatsApp Business API access
+- A verified phone number registered with WhatsApp Business
+- A publicly accessible webhook URL (HTTPS required)
+
+## Required Credentials
+
+You'll need the following credentials from Meta for Developers:
+
+<Steps>
+  <Step title="Phone Number ID">
+    The WhatsApp Business Phone Number ID from your Meta Business account.
+    
+    ```
+    Example: 123456789012345
+    ```
+  </Step>
+  
+  <Step title="Access Token">
+    A permanent access token for the WhatsApp Business API.
+    
+    <Warning>
+      Never share your access token. It provides full access to your WhatsApp Business account.
+    </Warning>
+  </Step>
+  
+  <Step title="App Secret">
+    Your Meta app secret used for webhook signature verification.
+  </Step>
+  
+  <Step title="Verify Token">
+    A custom token you create for webhook verification (can be any string).
+  </Step>
+</Steps>
+
+## Configuration Options
+
+### Option 1: Database Configuration (Recommended)
+
+Use the admin dashboard to configure WhatsApp credentials. They'll be encrypted and stored securely.
+
+```php src/Services/CredentialService.php
+$credentialService->saveWhatsAppCredentials([
+    'phone_number_id' => 'YOUR_PHONE_NUMBER_ID',
+    'access_token' => 'YOUR_ACCESS_TOKEN',
+    'app_secret' => 'YOUR_APP_SECRET',
+    'verify_token' => 'YOUR_VERIFY_TOKEN'
+]);
+```
+
+### Option 2: Environment Variables
+
+Add these variables to your `.env` file:
+
+```bash .env
+WHATSAPP_PHONE_NUMBER_ID=your_phone_number_id
+WHATSAPP_ACCESS_TOKEN=your_access_token
+WHATSAPP_APP_SECRET=your_app_secret
+WHATSAPP_VERIFY_TOKEN=your_custom_verify_token
+```
+
+### Configuration File
+
+The configuration is loaded from `config/config.php`:
+
+```php config/config.php
+'whatsapp' => [
+    'access_token' => getenv('WHATSAPP_ACCESS_TOKEN') ?: '',
+    'phone_number_id' => getenv('WHATSAPP_PHONE_NUMBER_ID') ?: '',
+    'verify_token' => getenv('WHATSAPP_VERIFY_TOKEN') ?: 'your_verify_token_here',
+    'app_secret' => getenv('WHATSAPP_APP_SECRET') ?: '',
+    'api_version' => 'v18.0',
+    'base_url' => 'https://graph.facebook.com'
+],
+```
+
+## Webhook Configuration
+
+### Webhook URL Setup
+
+<Steps>
+  <Step title="Get Your Webhook URL">
+    Your webhook URL should point to the `webhook.php` file:
+    
+    ```
+    https://yourdomain.com/webhook.php
+    ```
+    
+    <Info>
+      The URL must be publicly accessible and use HTTPS.
+    </Info>
+  </Step>
+  
+  <Step title="Configure in Meta Dashboard">
+    1. Go to your Meta for Developers dashboard
+    2. Select your app
+    3. Navigate to WhatsApp > Configuration
+    4. Add your webhook URL and verify token
+  </Step>
+  
+  <Step title="Subscribe to Webhook Events">
+    Subscribe to the `messages` webhook event to receive incoming messages.
+  </Step>
+</Steps>
+
+### Webhook Verification
+
+The webhook implements the verification challenge required by Meta:
+
+```php webhook.php
+if ($_SERVER['REQUEST_METHOD'] === 'GET') {
+    $mode = $_GET['hub_mode'] ?? '';
+    $token = $_GET['hub_verify_token'] ?? '';
+    $challenge = $_GET['hub_challenge'] ?? '';
+    
+    if ($credentialService && $credentialService->hasWhatsAppCredentials()) {
+        $waCreds = $credentialService->getWhatsAppCredentials();
+        $verifyToken = $waCreds['verify_token'];
+    } else {
+        $verifyToken = Config::get('whatsapp.verify_token');
+    }
+    
+    if ($mode === 'subscribe' && $token === $verifyToken) {
+        echo $challenge;
+        http_response_code(200);
+        exit;
+    }
+    
+    http_response_code(403);
+    exit;
+}
+```
+
+### Webhook Security
+
+The webhook validates incoming requests using HMAC-SHA256 signature verification:
+
+```php webhook.php
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    $rawBody = file_get_contents('php://input');
+    
+    if ($credentialService && $credentialService->hasWhatsAppCredentials()) {
+        $waCreds = $credentialService->getWhatsAppCredentials();
+        $appSecret = $waCreds['app_secret'];
+    } else {
+        $appSecret = Config::get('whatsapp.app_secret');
+    }
+    
+    if ($appSecret) {
+        $signature = $_SERVER['HTTP_X_HUB_SIGNATURE_256'] ?? '';
+        $expected = 'sha256=' . hash_hmac('sha256', $rawBody, $appSecret);
+        
+        if (!hash_equals($expected, $signature)) {
+            http_response_code(401);
+            exit('Unauthorized');
+        }
+    }
+}
+```
+
+<Warning>
+  If you don't configure an `app_secret`, webhook signature validation will be skipped. This is a security risk and should only be used for testing.
+</Warning>
+
+## WhatsApp Service API
+
+The `WhatsAppService` class handles all WhatsApp Business API interactions:
+
+### Sending Messages
+
+```php src/Services/WhatsAppService.php
+$whatsapp = new WhatsAppService(
+    $accessToken,
+    $phoneNumberId,
+    'v18.0',
+    $logger
+);
+
+// Send a text message
+$messageId = $whatsapp->sendMessage($phoneNumber, 'Hello from the bot!');
+```
+
+### Downloading Media
+
+```php
+// Download audio, image, or other media
+$mediaContent = $whatsapp->downloadMedia($mediaId);
+
+// Save to file
+file_put_contents('/path/to/file.ogg', $mediaContent);
+```
+
+### Marking Messages as Read
+
+```php
+$whatsapp->markAsRead($messageId);
+```
+
+### Parsing Webhook Payload
+
+```php
+$payload = json_decode($rawBody, true);
+$messageData = $whatsapp->parseWebhookPayload($payload);
+
+// Returns:
+[
+    'from' => '1234567890',
+    'message_id' => 'wamid.XXX',
+    'text' => 'User message',
+    'type' => 'text',
+    'contact_name' => 'John Doe',
+    'timestamp' => 1234567890
+]
+```
+
+## API Configuration
+
+The WhatsApp service uses the Meta Graph API:
+
+```php src/Services/WhatsAppService.php
+public function __construct($accessToken, $phoneNumberId, $apiVersion, Logger $logger)
+{
+    $this->accessToken = $accessToken;
+    $this->phoneNumberId = $phoneNumberId;
+    $this->apiVersion = $apiVersion;
+    $this->logger = $logger;
+
+    $this->client = new Client([
+        'base_uri' => 'https://graph.facebook.com/' . $this->apiVersion . '/',
+        'timeout' => 30,
+        'verify' => false
+    ]);
+}
+```
+
+<Info>
+  The default API version is `v18.0`. Update this in `config/config.php` if you need a different version.
+</Info>
+
+## Message Types Supported
+
+The webhook handles different message types:
+
+### Text Messages
+```json
+{
+  "type": "text",
+  "text": "User's text message"
+}
+```
+
+### Audio Messages
+```json
+{
+  "type": "audio",
+  "audio_id": "media_id_here"
+}
+```
+
+<Note>
+  Audio messages are automatically transcribed using OpenAI's Whisper API in AI mode. In classic mode, users are asked to send text instead.
+</Note>
+
+### Unsupported Types
+
+These message types return a friendly error:
+- Images
+- Documents
+- Videos
+- Stickers
+- Contacts
+- Locations
+
+## Testing Your Configuration
+
+<Steps>
+  <Step title="Test Webhook Verification">
+    Meta will send a GET request to verify your webhook. Check your server logs to confirm it's working.
+  </Step>
+  
+  <Step title="Send a Test Message">
+    Send a message to your WhatsApp Business number and verify it's received by the webhook.
+  </Step>
+  
+  <Step title="Check Response">
+    The bot should respond with its configured greeting message.
+  </Step>
+  
+  <Step title="Monitor Logs">
+    Check the logs in the `logs/` directory for any errors:
+    
+    ```bash
+    tail -f logs/app.log
+    ```
+  </Step>
+</Steps>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Webhook verification fails">
+    - Ensure your `verify_token` matches what you configured in Meta
+    - Check that your webhook URL is publicly accessible
+    - Verify HTTPS is properly configured
+  </Accordion>
+  
+  <Accordion title="Messages not being received">
+    - Check webhook subscription is active in Meta dashboard
+    - Verify the `messages` event is subscribed
+    - Check server logs for errors
+    - Ensure your access token hasn't expired
+  </Accordion>
+  
+  <Accordion title="Can't send messages">
+    - Verify your `access_token` is valid
+    - Check your `phone_number_id` is correct
+    - Ensure the recipient has messaged you first (24-hour window)
+    - Check WhatsApp Business API rate limits
+  </Accordion>
+  
+  <Accordion title="Signature validation errors">
+    - Verify your `app_secret` is correct
+    - Check that you're using the raw request body for signature verification
+    - Ensure the signature header is being received
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="OpenAI Setup" icon="brain" href="/configuration/openai-setup">
+    Configure AI capabilities with OpenAI
+  </Card>
+  <Card title="Credentials" icon="key" href="/configuration/credentials">
+    Learn about credential encryption and storage
+  </Card>
+</CardGroup>

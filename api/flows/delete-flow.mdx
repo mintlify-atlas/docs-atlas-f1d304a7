@@ -1,0 +1,187 @@
+---
+title: "Delete Flow"
+api: "GET /api/delete-flow.php?id={node_id}"
+description: "Delete a flow node and all its descendants"
+---
+
+## Overview
+
+Deletes a flow node from the conversation tree. This operation also removes all child nodes recursively, ensuring no orphaned nodes remain.
+
+<Warning>
+  This is a destructive operation. Deleted nodes cannot be recovered. Make sure to export your flows before performing bulk deletions.
+</Warning>
+
+## Request
+
+<ParamField query="id" type="integer" required>
+  ID of the node to delete
+</ParamField>
+
+<CodeGroup>
+```bash cURL
+curl "https://your-domain.com/api/delete-flow.php?id=42"
+```
+
+```javascript JavaScript
+const nodeId = 42;
+const response = await fetch(`/api/delete-flow.php?id=${nodeId}`);
+const data = await response.json();
+
+if (data.success) {
+  console.log('Node deleted successfully');
+}
+```
+
+```php PHP
+$nodeId = 42;
+$response = file_get_contents("https://your-domain.com/api/delete-flow.php?id={$nodeId}");
+$data = json_decode($response, true);
+```
+</CodeGroup>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the node was deleted successfully
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error description (only present on failure)
+</ResponseField>
+
+### Success Response Example
+
+```json
+{
+  "success": true
+}
+```
+
+### Error Response Examples
+
+```json Missing Node ID
+{
+  "success": false,
+  "error": "ID de nodo requerido"
+}
+```
+
+```json Internal Error
+{
+  "success": false,
+  "error": "Error al eliminar el nodo"
+}
+```
+
+## Error Handling
+
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Node deleted successfully (or node didn't exist) |
+| 400 | Missing or invalid node ID |
+| 500 | Internal server error |
+
+## Behavior Details
+
+### Cascade Deletion
+
+When you delete a node, the system:
+
+1. Identifies all child nodes recursively
+2. Deletes all descendants first (bottom-up)
+3. Deletes the target node last
+4. Maintains referential integrity
+
+### Example Flow Structure
+
+```
+Node 1 (root)
+├── Node 2 (menu)
+│   ├── Node 3 (question)
+│   │   └── Node 4 (message)
+│   └── Node 5 (question)
+└── Node 6 (message)
+```
+
+Deletions:
+- Delete Node 2: Also deletes Nodes 3, 4, and 5
+- Delete Node 3: Also deletes Node 4
+- Delete Node 1: Deletes the entire tree (all nodes)
+- Delete Node 4: Only deletes Node 4 (no children)
+
+## Implementation Details
+
+The endpoint:
+1. Validates the `id` query parameter is present and numeric
+2. Calls `FlowBuilderService->deleteNode($nodeId)`
+3. The service method recursively deletes all descendants
+4. Logs the deletion operation
+5. Returns success response
+
+Source: `api/delete-flow.php:11-20`
+
+## Safety Considerations
+
+<Warning>
+  **No Confirmation**: The deletion happens immediately without confirmation. Implement a confirmation dialog in your UI.
+</Warning>
+
+<Warning>
+  **No Undo**: There is no built-in undo mechanism. Consider implementing:
+  - Soft deletes (marking nodes as inactive)
+  - Flow versioning
+  - Automatic backups before deletions
+</Warning>
+
+<Info>
+  If the specified node ID doesn't exist, the endpoint returns `success: true` (idempotent operation).
+</Info>
+
+## Use Cases
+
+### Remove Outdated Flow Branch
+
+```javascript
+// Remove an entire conversation branch
+const branchRootId = 15;
+await fetch(`/api/delete-flow.php?id=${branchRootId}`);
+```
+
+### Clear All Flows
+
+```javascript
+// Get all root nodes and delete them
+const { nodes } = await fetch('/api/get-flows.php').then(r => r.json());
+const rootNodes = nodes.filter(n => n.parent_id === null);
+
+for (const node of rootNodes) {
+  await fetch(`/api/delete-flow.php?id=${node.id}`);
+}
+```
+
+### Delete Single Leaf Node
+
+```javascript
+// Remove a single node without children
+const leafNodeId = 42;
+await fetch(`/api/delete-flow.php?id=${leafNodeId}`);
+```
+
+## Best Practices
+
+<Check>
+  **Export before bulk deletes**: Use the flow export feature before major changes
+</Check>
+
+<Check>
+  **Delete leaf nodes first**: When manually cleaning up, delete from bottom to top
+</Check>
+
+<Check>
+  **Test in simulation**: Verify flow changes using the simulate endpoint before deploying
+</Check>
+
+<Check>
+  **Version control**: Keep flow backups in version control as JSON exports
+</Check>

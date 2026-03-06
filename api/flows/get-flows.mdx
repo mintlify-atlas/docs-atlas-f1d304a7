@@ -1,0 +1,172 @@
+---
+title: "Get Flows"
+api: "GET /api/get-flows.php"
+description: "Retrieve the complete conversation flow tree"
+---
+
+## Overview
+
+Retrieves all flow nodes in a hierarchical tree structure for the classic (flow-based) bot mode. This endpoint returns the complete conversation flow with all nodes, options, and branching logic.
+
+## Request
+
+No parameters required.
+
+<CodeGroup>
+```bash cURL
+curl https://your-domain.com/api/get-flows.php
+```
+
+```javascript JavaScript
+const response = await fetch('/api/get-flows.php');
+const data = await response.json();
+console.log(data.nodes);
+```
+
+```php PHP
+$response = file_get_contents('https://your-domain.com/api/get-flows.php');
+$data = json_decode($response, true);
+```
+</CodeGroup>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the request was successful
+</ResponseField>
+
+<ResponseField name="nodes" type="array" required>
+  Array of flow nodes organized in a tree structure
+  
+  <ResponseField name="id" type="integer">
+    Unique node identifier
+  </ResponseField>
+  
+  <ResponseField name="parent_id" type="integer | null">
+    ID of parent node, or `null` for root nodes
+  </ResponseField>
+  
+  <ResponseField name="node_type" type="string">
+    Type of node:
+    - `"message"` - Bot sends a message
+    - `"question"` - Bot asks a question and expects a response
+    - `"menu"` - Multiple choice options
+    - `"end"` - Conversation endpoint
+  </ResponseField>
+  
+  <ResponseField name="content" type="string">
+    Message text or question content
+  </ResponseField>
+  
+  <ResponseField name="options" type="array">
+    Available options for menu nodes (each option can branch to child nodes)
+  </ResponseField>
+  
+  <ResponseField name="metadata" type="object">
+    Additional node configuration (validation rules, actions, etc.)
+  </ResponseField>
+  
+  <ResponseField name="order_position" type="integer">
+    Display order for sibling nodes
+  </ResponseField>
+  
+  <ResponseField name="children" type="array">
+    Nested array of child nodes (recursive structure)
+  </ResponseField>
+</ResponseField>
+
+### Success Response Example
+
+```json
+{
+  "success": true,
+  "nodes": [
+    {
+      "id": 1,
+      "parent_id": null,
+      "node_type": "message",
+      "content": "¡Bienvenido! ¿En qué puedo ayudarte?",
+      "options": [],
+      "metadata": {},
+      "order_position": 1,
+      "children": [
+        {
+          "id": 2,
+          "parent_id": 1,
+          "node_type": "menu",
+          "content": "Por favor elige una opción:",
+          "options": [
+            {"label": "Agendar cita", "value": "1"},
+            {"label": "Consultar información", "value": "2"},
+            {"label": "Hablar con un operador", "value": "3"}
+          ],
+          "metadata": {},
+          "order_position": 1,
+          "children": [
+            {
+              "id": 3,
+              "parent_id": 2,
+              "node_type": "question",
+              "content": "¿Cuál es tu nombre completo?",
+              "options": [],
+              "metadata": {
+                "validation": "text",
+                "required": true
+              },
+              "order_position": 1,
+              "children": []
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}
+```
+
+### Error Response Example
+
+```json
+{
+  "success": false,
+  "error": "Error al obtener flujos"
+}
+```
+
+## Node Types
+
+| Type | Description | Has Options | Expects Response |
+|------|-------------|-------------|------------------|
+| `message` | Bot sends information | No | No |
+| `question` | Bot asks for user input | No | Yes |
+| `menu` | Multiple choice selection | Yes | Yes |
+| `end` | Conversation termination | No | No |
+
+## Error Handling
+
+| Status Code | Description |
+|-------------|-------------|
+| 200 | Flow tree retrieved successfully |
+| 500 | Internal server error |
+
+## Implementation Details
+
+The endpoint:
+1. Calls `FlowBuilderService->getFlowTree()` to retrieve all nodes
+2. Builds a hierarchical tree structure from flat database records
+3. Includes all node relationships (parent-child)
+4. Preserves ordering using `order_position`
+5. Returns nested structure suitable for tree rendering
+
+Source: `api/get-flows.php:11-12`
+
+## Usage
+
+This endpoint is used by:
+- Flow builder UI to display and edit conversation flows
+- Classic bot mode (`botMode: "classic"`) to process conversations
+- Flow preview and testing functionality
+
+<Info>
+  The flow tree is only used when the bot is in classic mode. In AI mode (`botMode: "ai"`), the RAG system handles conversations instead.
+</Info>

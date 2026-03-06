@@ -1,0 +1,365 @@
+---
+title: Database
+description: PDO-based database abstraction layer with connection pooling, prepared statements, and transaction support
+icon: database
+---
+
+## Overview
+
+The `Database` class provides a singleton-based PDO wrapper for MySQL database operations. It offers secure query execution with prepared statements, CRUD operations, and full transaction support.
+
+<Note>
+The Database class uses the Singleton pattern to ensure a single connection instance throughout the application lifecycle.
+</Note>
+
+## Connection Management
+
+### Initialization
+
+The database connection is established on first access and reused for all subsequent operations.
+
+```php
+use App\Core\Database;
+
+// First initialization requires configuration
+$config = [
+    'host' => 'localhost',
+    'port' => 3306,
+    'name' => 'whatsapp_rag_bot',
+    'charset' => 'utf8mb4',
+    'user' => 'root',
+    'password' => 'secret'
+];
+
+$db = Database::getInstance($config);
+
+// Subsequent calls don't require config
+$db = Database::getInstance();
+```
+
+<Warning>
+The first call to `getInstance()` must include configuration. Subsequent calls without configuration will reuse the existing instance.
+</Warning>
+
+### Connection Features
+
+The database connection is configured with:
+- **Error Mode**: Exception-based error handling (`PDO::ERRMODE_EXCEPTION`)
+- **Fetch Mode**: Associative arrays by default (`PDO::FETCH_ASSOC`)
+- **Prepared Statements**: Native prepared statements (`PDO::ATTR_EMULATE_PREPARES => false`)
+
+## Query Methods
+
+### Raw Queries
+
+Execute custom SQL queries with parameter binding:
+
+```php
+// Execute query and get PDOStatement
+$stmt = $db->query(
+    'SELECT * FROM conversations WHERE phone_number = :phone',
+    [':phone' => '+1234567890']
+);
+
+// Fetch all results
+$results = $db->fetchAll(
+    'SELECT * FROM messages WHERE conversation_id = :id ORDER BY created_at DESC',
+    [':id' => 123]
+);
+
+// Fetch single result
+$conversation = $db->fetchOne(
+    'SELECT * FROM conversations WHERE id = :id',
+    [':id' => 456]
+);
+```
+
+## CRUD Operations
+
+### Insert Records
+
+```php
+// Insert new document
+$documentId = $db->insert('documents', [
+    'filename' => 'doc_123.pdf',
+    'original_name' => 'Product Guide.pdf',
+    'file_type' => 'pdf',
+    'content_text' => 'Extracted content...',
+    'chunk_count' => 15,
+    'file_size' => 204800,
+    'file_hash' => md5_file($filepath),
+    'is_active' => true
+]);
+
+echo "Inserted document ID: $documentId";
+```
+
+### Update Records
+
+```php
+// Update conversation status
+$affectedRows = $db->update(
+    'conversations',
+    ['status' => 'pending_human', 'ai_enabled' => false],
+    'phone_number = :phone',
+    [':phone' => '+1234567890']
+);
+
+echo "Updated $affectedRows row(s)";
+```
+
+### Delete Records
+
+```php
+// Delete old messages
+$deletedCount = $db->delete(
+    'messages',
+    'created_at < :date',
+    [':date' => date('Y-m-d', strtotime('-90 days'))]
+);
+
+echo "Deleted $deletedCount message(s)";
+```
+
+## Transaction Support
+
+The Database class provides full transaction control for atomic operations:
+
+<CodeGroup>
+```php Basic Transaction
+$db = Database::getInstance();
+
+try {
+    $db->beginTransaction();
+    
+    // Insert conversation
+    $convId = $db->insert('conversations', [
+        'phone_number' => '+1234567890',
+        'status' => 'active',
+        'ai_enabled' => true
+    ]);
+    
+    // Insert first message
+    $db->insert('messages', [
+        'conversation_id' => $convId,
+        'sender_type' => 'user',
+        'message_text' => 'Hello!',
+        'media_type' => 'text'
+    ]);
+    
+    $db->commit();
+    echo "Transaction completed successfully";
+    
+} catch (Exception $e) {
+    $db->rollback();
+    echo "Transaction failed: " . $e->getMessage();
+}
+```
+
+```php Complex Transaction
+$db = Database::getInstance();
+
+try {
+    $db->beginTransaction();
+    
+    // Insert document
+    $docId = $db->insert('documents', [
+        'filename' => 'guide.pdf',
+        'original_name' => 'User Guide.pdf',
+        'file_type' => 'pdf',
+        'content_text' => $extractedText,
+        'file_size' => strlen($extractedText),
+        'file_hash' => md5($extractedText)
+    ]);
+    
+    // Insert vectors for each chunk
+    foreach ($chunks as $index => $chunk) {
+        $embedding = $embedder->embed($chunk);
+        $db->insert('vectors', [
+            'document_id' => $docId,
+            'chunk_text' => $chunk,
+            'chunk_index' => $index,
+            'embedding' => $embedding
+        ]);
+    }
+    
+    // Update chunk count
+    $db->update(
+        'documents',
+        ['chunk_count' => count($chunks)],
+        'id = :id',
+        [':id' => $docId]
+    );
+    
+    $db->commit();
+    
+} catch (Exception $e) {
+    $db->rollback();
+    throw $e;
+}
+```
+</CodeGroup>
+
+## Database Schema
+
+The application uses the following core tables:
+
+### Main Tables
+
+| Table | Description |
+|-------|-------------|
+| `documents` | Stores uploaded documents with metadata and extracted text |
+| `vectors` | Contains embeddings and chunks for RAG retrieval |
+| `conversations` | Tracks WhatsApp conversations and their status |
+| `messages` | Stores all messages with context and confidence scores |
+| `settings` | Application-wide configuration key-value pairs |
+| `bot_credentials` | Encrypted API credentials for WhatsApp and OpenAI |
+
+### Documents Table
+
+```sql
+CREATE TABLE documents (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    filename VARCHAR(255) NOT NULL,
+    original_name VARCHAR(255) NOT NULL,
+    file_type VARCHAR(50) NOT NULL,
+    content_text LONGTEXT NOT NULL,
+    chunk_count INT DEFAULT 0,
+    file_size INT NOT NULL,
+    file_hash VARCHAR(32),
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+);
+```
+
+### Conversations Table
+
+```sql
+CREATE TABLE conversations (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    phone_number VARCHAR(50) NOT NULL,
+    contact_name VARCHAR(255),
+    status ENUM('active', 'closed', 'pending_human') DEFAULT 'active',
+    ai_enabled BOOLEAN DEFAULT TRUE,
+    last_message_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+```
+
+<Note>
+The full database schema is available in `database/schema.sql` with all indexes and foreign key constraints.
+</Note>
+
+## API Reference
+
+### `getInstance(array $config = null): Database`
+
+Returns the singleton Database instance. First call requires configuration.
+
+**Location**: `src/Core/Database.php:20`
+
+**Parameters**:
+- `$config` (array, optional): Database configuration array with keys: `host`, `port`, `name`, `charset`, `user`, `password`
+
+**Returns**: `Database` instance
+
+**Throws**: `RuntimeException` if configuration is missing on first call
+
+---
+
+### `query(string $sql, array $params = []): PDOStatement`
+
+Executes a prepared statement with parameter binding.
+
+**Location**: `src/Core/Database.php:62`
+
+**Parameters**:
+- `$sql` (string): SQL query with placeholders
+- `$params` (array): Parameter bindings
+
+**Returns**: `PDOStatement` object
+
+**Throws**: `RuntimeException` on query failure
+
+---
+
+### `insert(string $table, array $data): string`
+
+Inserts a new record and returns the auto-increment ID.
+
+**Location**: `src/Core/Database.php:85`
+
+**Parameters**:
+- `$table` (string): Table name
+- `$data` (array): Associative array of column => value pairs
+
+**Returns**: Last insert ID as string
+
+---
+
+### `update(string $table, array $data, string $where, array $whereParams = []): int`
+
+Updates records matching the WHERE clause.
+
+**Location**: `src/Core/Database.php:108`
+
+**Parameters**:
+- `$table` (string): Table name
+- `$data` (array): Columns to update
+- `$where` (string): WHERE clause condition
+- `$whereParams` (array): Parameters for WHERE clause
+
+**Returns**: Number of affected rows
+
+---
+
+### `delete(string $table, string $where, array $params = []): int`
+
+Deletes records matching the WHERE clause.
+
+**Location**: `src/Core/Database.php:130`
+
+**Parameters**:
+- `$table` (string): Table name
+- `$where` (string): WHERE clause condition
+- `$params` (array): Parameters for WHERE clause
+
+**Returns**: Number of deleted rows
+
+---
+
+### Transaction Methods
+
+- **`beginTransaction(): bool`** - Starts a new transaction (`src/Core/Database.php:137`)
+- **`commit(): bool`** - Commits the active transaction (`src/Core/Database.php:142`)
+- **`rollback(): bool`** - Rolls back the active transaction (`src/Core/Database.php:147`)
+
+## Best Practices
+
+<Card title="Use Prepared Statements" icon="shield-check">
+Always use parameter binding to prevent SQL injection attacks. Never concatenate user input into SQL queries.
+</Card>
+
+<Card title="Handle Exceptions" icon="triangle-exclamation">
+Wrap database operations in try-catch blocks to handle PDOExceptions gracefully.
+</Card>
+
+<Card title="Use Transactions" icon="rotate">
+For operations that span multiple tables, use transactions to ensure data consistency.
+</Card>
+
+<Card title="Close Cursors" icon="circle-xmark">
+For large result sets, close PDOStatement cursors when done to free memory.
+</Card>
+
+## Related Services
+
+<CardGroup cols={2}>
+  <Card title="Logger" icon="file-lines" href="/services/logger">
+    Log database operations and errors
+  </Card>
+  <Card title="Encryption" icon="lock" href="/services/encryption">
+    Encrypt sensitive database credentials
+  </Card>
+</CardGroup>

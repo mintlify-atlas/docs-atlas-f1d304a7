@@ -1,0 +1,233 @@
+---
+title: 'Reply to Conversation'
+api: 'POST /api/conversations/{id}/reply'
+description: 'Send a human reply to a conversation via WhatsApp'
+---
+
+## Endpoint
+
+```
+POST /api/conversations/{id}/reply
+```
+
+Sends a human reply message to a conversation's phone number via WhatsApp. The message is saved to the database and the conversation status is updated to `active`.
+
+## Path Parameters
+
+<ParamField path="id" type="integer" required>
+  The unique identifier of the conversation to reply to
+</ParamField>
+
+## Request Body
+
+<ParamField body="message" type="string" required>
+  The text message to send to the customer
+</ParamField>
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the reply was sent successfully
+</ResponseField>
+
+<ResponseField name="message" type="string">
+  Success message when the reply is sent (only present when `success` is true)
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the request failed (only present when `success` is false)
+</ResponseField>
+
+## Examples
+
+<CodeGroup>
+
+```bash cURL
+curl -X POST 'https://your-domain.com/api/conversations/1/reply' \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "message": "Thank you for contacting us. Your issue has been resolved."
+  }'
+```
+
+```javascript JavaScript
+const conversationId = 1;
+const message = "Thank you for contacting us. Your issue has been resolved.";
+
+const response = await fetch(`/api/conversations/${conversationId}/reply`, {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({ message })
+});
+
+const data = await response.json();
+
+if (data.success) {
+  console.log('Reply sent successfully');
+} else {
+  console.error('Failed to send reply:', data.error);
+}
+```
+
+```javascript JavaScript (with async/await)
+async function sendReply(conversationId, message) {
+  try {
+    const response = await fetch(`/api/conversations/${conversationId}/reply`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ message })
+    });
+    
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error);
+    }
+    
+    return data;
+  } catch (error) {
+    console.error('Error sending reply:', error);
+    throw error;
+  }
+}
+
+// Usage
+await sendReply(1, 'Hello! How can I help you today?');
+```
+
+```php PHP
+$conversationId = 1;
+$message = "Thank you for contacting us. Your issue has been resolved.";
+
+$data = json_encode([
+    'message' => $message
+]);
+
+$ch = curl_init();
+curl_setopt($ch, CURLOPT_URL, "https://your-domain.com/api/conversations/{$conversationId}/reply");
+curl_setopt($ch, CURLOPT_POST, true);
+curl_setopt($ch, CURLOPT_POSTFIELDS, $data);
+curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+
+$response = curl_exec($ch);
+$result = json_decode($response, true);
+
+if ($result['success']) {
+    echo "Reply sent successfully\n";
+} else {
+    echo "Error: " . $result['error'] . "\n";
+}
+
+curl_close($ch);
+```
+
+</CodeGroup>
+
+## Response Examples
+
+### Success Response
+
+```json
+{
+  "success": true,
+  "message": "Reply sent successfully"
+}
+```
+
+### Error Response (Missing Parameters)
+
+```json
+{
+  "success": false,
+  "error": "Error al enviar respuesta"
+}
+```
+
+### Error Response (Conversation Not Found)
+
+```json
+{
+  "success": false,
+  "error": "Error al enviar respuesta"
+}
+```
+
+## Implementation Details
+
+The endpoint is implemented in `api/reply-conversation.php` and performs the following operations:
+
+1. Validates that conversation ID and message are provided
+2. Fetches the conversation from the database
+3. Loads WhatsApp credentials (from database or config)
+4. Sends the message via WhatsApp API
+5. Saves the message to the database with `sender_type` = `human`
+6. Updates conversation status to `active`
+7. Updates the `last_message_at` timestamp
+
+Route pattern (from `index.php:172`):
+```php
+if ($requestMethod === 'POST' && 
+    preg_match('#^/api/conversations/(\d+)/reply$#', $path, $matches)) {
+    $_GET['id'] = $matches[1];
+    require __DIR__ . '/api/reply-conversation.php';
+}
+```
+
+Key code sections:
+
+**Validation** (`reply-conversation.php:15-21`):
+```php
+$id = $_GET['id'] ?? null;
+$input = json_decode(file_get_contents('php://input'), true);
+$message = $input['message'] ?? null;
+
+if (!$id || !$message) {
+    throw new \InvalidArgumentException('Conversation ID and message required');
+}
+```
+
+**WhatsApp Integration** (`reply-conversation.php:54`):
+```php
+$whatsapp->sendMessage($result['phone_number'], $message);
+```
+
+**Database Updates** (`reply-conversation.php:56-63`):
+```php
+$conversationService->addMessage($id, 'human', $message);
+$conversationService->updateConversationStatus($id, 'active');
+$db->query(
+    'UPDATE conversations SET last_message_at = NOW() WHERE id = :id',
+    [':id' => $id]
+);
+```
+
+## Error Handling
+
+The endpoint handles the following error scenarios:
+
+- **Missing conversation ID or message**: Returns 500 error
+- **Conversation not found**: Returns 500 error  
+- **WhatsApp API failure**: Returns 500 error
+- **Database error**: Returns 500 error
+
+All errors return HTTP 500 status code with a generic error message to avoid exposing internal details.
+
+## Credentials Priority
+
+The endpoint loads WhatsApp credentials in the following priority order:
+
+1. **Database credentials** (if available via `CredentialService`)
+2. **Config file credentials** (fallback from `config/config.php`)
+
+This allows credentials to be managed either through the UI (stored encrypted in database) or through configuration files.
+
+## Notes
+
+- The message is sent immediately via WhatsApp API before being saved to the database
+- If WhatsApp sending fails, the message is NOT saved to the database
+- The conversation status is always set to `active` after a human reply
+- The `last_message_at` timestamp is updated to the current time
+- All message text is sent as-is without modification or sanitization beyond JSON decoding

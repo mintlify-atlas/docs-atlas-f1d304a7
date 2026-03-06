@@ -1,0 +1,140 @@
+---
+title: 'System Statistics'
+api: 'GET /api/get-stats.php'
+description: 'Retrieve dashboard statistics including conversations, documents, and vector embeddings'
+---
+
+## Overview
+
+The statistics endpoint provides comprehensive metrics for the dashboard, including conversation counts, document statistics, and vector embedding information.
+
+## Endpoint
+
+```
+GET /api/get-stats.php
+```
+
+## Response
+
+<ResponseField name="success" type="boolean" required>
+  Indicates if the request was successful
+</ResponseField>
+
+<ResponseField name="stats" type="object" required>
+  Statistics object containing all metrics
+  
+  <ResponseField name="conversations" type="object">
+    Conversation statistics from ConversationService
+    <ResponseField name="total" type="number">
+      Total number of conversations
+    </ResponseField>
+    <ResponseField name="active" type="number">
+      Number of active conversations
+    </ResponseField>
+    <ResponseField name="archived" type="number">
+      Number of archived conversations
+    </ResponseField>
+    <ResponseField name="total_messages" type="number">
+      Total messages across all conversations
+    </ResponseField>
+  </ResponseField>
+  
+  <ResponseField name="documents" type="object">
+    Document statistics from DocumentService
+    <ResponseField name="total" type="number">
+      Total number of uploaded documents
+    </ResponseField>
+    <ResponseField name="by_type" type="object">
+      Document counts grouped by file type (e.g., PDF, DOCX, TXT)
+    </ResponseField>
+    <ResponseField name="total_size_mb" type="number">
+      Total size of all documents in megabytes
+    </ResponseField>
+  </ResponseField>
+  
+  <ResponseField name="vectors" type="number">
+    Total number of vector embeddings stored in the system
+  </ResponseField>
+</ResponseField>
+
+<ResponseField name="error" type="string">
+  Error message if the request failed (only present when `success` is `false`)
+</ResponseField>
+
+## Status Codes
+
+- `200 OK`: Statistics retrieved successfully
+- `500 Internal Server Error`: Error retrieving statistics
+
+## Example Response
+
+<CodeGroup>
+
+```json Success Response
+{
+  "success": true,
+  "stats": {
+    "conversations": {
+      "total": 156,
+      "active": 42,
+      "archived": 114,
+      "total_messages": 3240
+    },
+    "documents": {
+      "total": 87,
+      "by_type": {
+        "pdf": 45,
+        "docx": 28,
+        "txt": 14
+      },
+      "total_size_mb": 234.5
+    },
+    "vectors": 12847
+  }
+}
+```
+
+```json Error Response
+{
+  "success": false,
+  "error": "Error al obtener estadísticas"
+}
+```
+
+</CodeGroup>
+
+## Implementation Details
+
+The endpoint aggregates data from three core services:
+
+1. **ConversationService**: Retrieves conversation and message statistics
+   - Source: `api/get-stats.php:24`
+   - Method: `getConversationStats()`
+
+2. **DocumentService**: Collects document upload statistics
+   - Source: `api/get-stats.php:25`
+   - Method: `getDocumentStats()`
+
+3. **VectorSearchService**: Counts stored vector embeddings
+   - Source: `api/get-stats.php:26`
+   - Method: `countVectors()`
+
+## Configuration
+
+The endpoint uses the following configuration values:
+
+- `uploads.path`: Document storage location
+- `uploads.allowed_types`: Permitted file types
+- `uploads.max_size`: Maximum upload size
+- `rag.similarity_method`: Vector similarity calculation method
+
+## Use Cases
+
+- **Dashboard Display**: Show real-time metrics on admin dashboard
+- **Usage Monitoring**: Track system usage and growth over time
+- **Capacity Planning**: Identify when storage or resources need scaling
+- **Analytics**: Generate reports on conversation and document trends
+
+## Error Handling
+
+The endpoint uses output buffering to ensure clean JSON responses. All exceptions are caught and logged, returning a generic error message to prevent information leakage.
