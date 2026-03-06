@@ -1,0 +1,173 @@
+{
+  "projectType": "saas",
+  "projectName": "WhatsApp RAG Bot",
+  "projectDescription": "A WhatsApp chatbot platform with RAG (Retrieval-Augmented Generation) architecture, AI-powered conversations, calendar integration, and visual flow builder",
+  "theme": "palm",
+  "primaryColor": "#25D366",
+  "lightColor": "#128C7E",
+  "darkColor": "#075E54",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Core Features",
+            "pages": [
+              "features/rag-system",
+              "features/ai-conversations",
+              "features/calendar-integration",
+              "features/flow-builder",
+              "features/conversation-management"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/credentials",
+              "configuration/whatsapp-setup",
+              "configuration/openai-setup",
+              "configuration/google-calendar",
+              "configuration/system-settings"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/requirements",
+              "deployment/local-development",
+              "deployment/production",
+              "deployment/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Webhook",
+            "pages": [
+              "api/webhook"
+            ]
+          },
+          {
+            "group": "Conversations",
+            "pages": [
+              "api/conversations/get-conversations",
+              "api/conversations/get-messages",
+              "api/conversations/reply",
+              "api/conversations/toggle-ai"
+            ]
+          },
+          {
+            "group": "Documents",
+            "pages": [
+              "api/documents/upload",
+              "api/documents/get-documents",
+              "api/documents/delete",
+              "api/documents/get-content"
+            ]
+          },
+          {
+            "group": "Settings",
+            "pages": [
+              "api/settings/get-settings",
+              "api/settings/save-settings",
+              "api/settings/credentials",
+              "api/settings/calendar"
+            ]
+          },
+          {
+            "group": "Flows",
+            "pages": [
+              "api/flows/get-flows",
+              "api/flows/save-flow",
+              "api/flows/delete-flow",
+              "api/flows/simulate"
+            ]
+          },
+          {
+            "group": "System",
+            "pages": [
+              "api/system/health",
+              "api/system/stats",
+              "api/system/check-updates"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Services",
+        "groups": [
+          {
+            "group": "Core Services",
+            "pages": [
+              "services/rag-service",
+              "services/openai-service",
+              "services/whatsapp-service",
+              "services/vector-search"
+            ]
+          },
+          {
+            "group": "Business Logic",
+            "pages": [
+              "services/conversation-service",
+              "services/document-service",
+              "services/calendar-service",
+              "services/flow-builder-service"
+            ]
+          },
+          {
+            "group": "Infrastructure",
+            "pages": [
+              "services/database",
+              "services/encryption",
+              "services/logger"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "RAG-powered AI responses using document knowledge base",
+    "WhatsApp Business API integration with webhook support",
+    "Google Calendar integration for appointment scheduling",
+    "Visual flow builder for custom conversation flows",
+    "Dual bot modes: AI-powered and classic rule-based",
+    "Audio transcription with OpenAI Whisper",
+    "Vector similarity search with MySQL storage",
+    "Real-time conversation management dashboard",
+    "Document upload and processing (PDF, DOCX, TXT)",
+    "Human handoff capabilities"
+  ],
+  "publicApiSurface": [
+    "POST /webhook - WhatsApp webhook endpoint",
+    "GET /api/conversations - List conversations",
+    "GET /api/conversations/{id}/messages - Get conversation messages",
+    "POST /api/conversations/{id}/reply - Send manual reply",
+    "POST /api/conversations/{id}/toggle-ai - Toggle AI mode",
+    "POST /api/upload - Upload document for RAG indexing",
+    "GET /api/get-documents - List uploaded documents",
+    "DELETE /api/delete-document - Remove document",
+    "GET /api/get-settings - Get system settings",
+    "POST /api/save-settings - Update settings",
+    "GET /api/get-credentials - Get API credentials",
+    "POST /api/save-credentials - Update credentials",
+    "GET /api/get-flows - Get conversation flows",
+    "POST /api/save-flow - Save conversation flow",
+    "DELETE /api/delete-flow - Delete flow",
+    "POST /api/simulate-flow - Test flow execution",
+    "GET /api/health - System health check",
+    "GET /api/stats - Dashboard statistics"
+  ]
+}
